@@ -1,0 +1,15 @@
+14 problem(s):
+  internal/gen/testdata/mistakes/mistakes.go:12:2: Input.count: required on a plain integer cannot tell a missing value from 0; use a pointer, or min to forbid zero
+  internal/gen/testdata/mistakes/mistakes.go:13:2: Input.name: unknown rule "bogus"
+  internal/gen/testdata/mistakes/mistakes.go:14:2: Input.rate: rule gt does not apply to a string
+  internal/gen/testdata/mistakes/mistakes.go:15:2: Input.when: requiredif refers to unknown field "missing"
+  internal/gen/testdata/mistakes/mistakes.go:17:2: Input.note: requiredif compares boolean flag with "yes"; use true, false or nothing
+  internal/gen/testdata/mistakes/mistakes.go:18:2: Input.things (elements): rule email does not apply to an integer
+  internal/gen/testdata/mistakes/mistakes.go:22:2: Filter.nested: a query parameter must be a scalar or a list of scalars
+  internal/gen/testdata/mistakes/mistakes.go:26:2: Out.ch: type chan int cannot be sent as JSON
+  internal/gen/testdata/mistakes/mistakes.go:30:6: handler github.com/maulai/tether/internal/gen/testdata/mistakes.Delete: "delete" is a reserved word in TypeScript; rename it
+  internal/gen/testdata/mistakes/mistakes.go:43:40: WrongShape must have the shape func(*http.Request[, In]) ([Out, ]error)
+  internal/gen/testdata/mistakes/mistakes.go:44:43: Pointer: the input must be a struct, not *github.com/maulai/tether/internal/gen/testdata/mistakes.Input
+  internal/gen/testdata/mistakes/mistakes.go:45:26: this argument must be a string constant, so tether can read it
+  internal/gen/testdata/mistakes/mistakes.go:46:43: the handler must be a named function or method, so tether can name the TypeScript function after it
+  internal/gen/testdata/mistakes/mistakes.go:47:13: "FETCH /x": the pattern must start with GET, POST, PUT, PATCH or DELETE

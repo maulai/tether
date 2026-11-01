@@ -1,0 +1,476 @@
+package gen
+
+import (
+	"fmt"
+	"go/ast"
+	"go/constant"
+	"go/parser"
+	"go/token"
+	"go/types"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"golang.org/x/tools/go/packages"
+
+	"github.com/maulai/tether/messages/de"
+)
+
+const (
+	tetherPath = "github.com/maulai/tether"
+	genFile    = "tether_gen.go"
+)
+
+// program is what the generator reads from the source: the routes, the
+// project's rules and messages, and the declarations it needs for names and
+// comments.
+type program struct {
+	fset     *token.FileSet
+	pkgs     []*packages.Package
+	roots    map[*types.Package]*packages.Package
+	funcDocs map[*types.Func]string
+	typeDocs map[*types.TypeName]string
+	varDocs  map[*types.Var]string
+	varInits map[*types.Var]ast.Expr
+	infoOf   map[*ast.File]*types.Info
+
+	routes   []*route
+	patterns map[string]string // name -> Go expression
+	checks   []string
+	messages map[string]string // nil: no Messages call
+	errs     []string
+}
+
+type route struct {
+	pos     token.Position
+	method  string
+	path    string
+	params  []pathParam
+	handler *types.Func
+	name    string // TypeScript function name
+	doc     string
+	in      types.Type // nil without input
+	out     types.Type // nil without output
+	upload  bool
+	file    bool
+	query   bool
+}
+
+type pathParam struct {
+	name     string
+	wildcard bool
+}
+
+func (p *program) errorf(pos token.Pos, format string, args ...any) {
+	where := ""
+	if pos.IsValid() {
+		where = p.fset.Position(pos).String() + ": "
+	}
+	p.errs = append(p.errs, where+fmt.Sprintf(format, args...))
+}
+
+func load(dir string, patterns []string) (*program, error) {
+	cfg := &packages.Config{
+		Fset: token.NewFileSet(),
+		Mode: packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles | packages.NeedSyntax |
+			packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedModule,
+		Dir: dir,
+		// A stale tether_gen.go may name constants that no longer exist; the
+		// generator reads the program without it and writes a new one.
+		ParseFile: func(fset *token.FileSet, filename string, src []byte) (*ast.File, error) {
+			f, err := parser.ParseFile(fset, filename, src, parser.ParseComments)
+			if f != nil && filepath.Base(filename) == genFile {
+				f.Decls, f.Imports = nil, nil
+			}
+			return f, err
+		},
+	}
+	pkgs, err := packages.Load(cfg, patterns...)
+	if err != nil {
+		return nil, err
+	}
+	p := &program{
+		fset:     cfg.Fset,
+		pkgs:     pkgs,
+		roots:    map[*types.Package]*packages.Package{},
+		funcDocs: map[*types.Func]string{},
+		typeDocs: map[*types.TypeName]string{},
+		varDocs:  map[*types.Var]string{},
+		varInits: map[*types.Var]ast.Expr{},
+		infoOf:   map[*ast.File]*types.Info{},
+		patterns: map[string]string{},
+	}
+	var loadErrs []string
+	for _, pkg := range pkgs {
+		for _, e := range pkg.Errors {
+			if strings.Contains(e.Pos, genFile) {
+				continue
+			}
+			loadErrs = append(loadErrs, e.Error())
+		}
+	}
+	if len(loadErrs) > 0 {
+		return nil, fmt.Errorf("the program does not compile:\n  %s", strings.Join(loadErrs, "\n  "))
+	}
+	for _, pkg := range pkgs {
+		p.roots[pkg.Types] = pkg
+		for _, f := range pkg.Syntax {
+			p.infoOf[f] = pkg.TypesInfo
+			p.index(pkg.TypesInfo, f)
+		}
+	}
+	for _, pkg := range pkgs {
+		for _, f := range pkg.Syntax {
+			p.scan(pkg.TypesInfo, f)
+		}
+	}
+	sort.Slice(p.routes, func(i, j int) bool {
+		a, b := p.routes[i], p.routes[j]
+		if a.path != b.path {
+			return a.path < b.path
+		}
+		return methodOrder(a.method) < methodOrder(b.method)
+	})
+	return p, nil
+}
+
+func methodOrder(m string) int {
+	return strings.Index("GET POST PUT PATCH DELETE", m)
+}
+
+// index records doc comments and variable initialisers by object, so later
+// steps can find them from types alone.
+func (p *program) index(info *types.Info, f *ast.File) {
+	for _, decl := range f.Decls {
+		switch d := decl.(type) {
+		case *ast.FuncDecl:
+			if fn, ok := info.Defs[d.Name].(*types.Func); ok {
+				p.funcDocs[fn] = strings.TrimSpace(d.Doc.Text())
+			}
+		case *ast.GenDecl:
+			for _, spec := range d.Specs {
+				switch s := spec.(type) {
+				case *ast.TypeSpec:
+					doc := s.Doc
+					if doc == nil && len(d.Specs) == 1 {
+						doc = d.Doc
+					}
+					if tn, ok := info.Defs[s.Name].(*types.TypeName); ok {
+						p.typeDocs[tn] = strings.TrimSpace(doc.Text())
+					}
+				case *ast.ValueSpec:
+					for i, name := range s.Names {
+						if v, ok := info.Defs[name].(*types.Var); ok && i < len(s.Values) {
+							p.varInits[v] = s.Values[i]
+						}
+					}
+				}
+			}
+		}
+	}
+	ast.Inspect(f, func(n ast.Node) bool {
+		st, ok := n.(*ast.StructType)
+		if !ok {
+			return true
+		}
+		for _, field := range st.Fields.List {
+			doc := field.Doc
+			if doc == nil {
+				doc = field.Comment
+			}
+			for _, name := range field.Names {
+				if v, ok := info.Defs[name].(*types.Var); ok {
+					p.varDocs[v] = strings.TrimSpace(doc.Text())
+				}
+			}
+		}
+		return true
+	})
+}
+
+// scan finds the calls into tether that the generator must read.
+func (p *program) scan(info *types.Info, f *ast.File) {
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		fn := callee(info, call)
+		if fn == nil || fn.Pkg() == nil || fn.Pkg().Path() != tetherPath {
+			return true
+		}
+		switch fn.Name() {
+		case "Route":
+			p.route(info, call)
+		case "Pattern":
+			name, ok1 := p.constString(info, call.Args[0])
+			expr, ok2 := p.constString(info, call.Args[1])
+			p.constString(info, call.Args[2])
+			if ok1 && ok2 {
+				if _, dup := p.patterns[name]; dup {
+					p.errorf(call.Pos(), "rule %s registered twice", name)
+				}
+				p.patterns[name] = expr
+			}
+		case "Check":
+			name, ok := p.constString(info, call.Args[0])
+			p.constString(info, call.Args[2])
+			if ok {
+				p.checks = append(p.checks, name)
+			}
+		case "Messages":
+			p.readMessages(info, call)
+		}
+		return true
+	})
+}
+
+func callee(info *types.Info, call *ast.CallExpr) *types.Func {
+	var id *ast.Ident
+	switch fun := ast.Unparen(call.Fun).(type) {
+	case *ast.Ident:
+		id = fun
+	case *ast.SelectorExpr:
+		id = fun.Sel
+	case *ast.IndexExpr:
+		if sel, ok := fun.X.(*ast.SelectorExpr); ok {
+			id = sel.Sel
+		}
+	}
+	if id == nil {
+		return nil
+	}
+	fn, _ := info.Uses[id].(*types.Func)
+	return fn
+}
+
+func (p *program) constString(info *types.Info, e ast.Expr) (string, bool) {
+	tv, ok := info.Types[e]
+	if !ok || tv.Value == nil || tv.Value.Kind() != constant.String {
+		p.errorf(e.Pos(), "this argument must be a string constant, so tether can read it")
+		return "", false
+	}
+	return constant.StringVal(tv.Value), true
+}
+
+func (p *program) route(info *types.Info, call *ast.CallExpr) {
+	pattern, ok := p.constString(info, call.Args[0])
+	if !ok {
+		return
+	}
+	method, path, _ := strings.Cut(pattern, " ")
+	path = strings.TrimSpace(path)
+	r := &route{pos: p.fset.Position(call.Pos()), method: method, path: path}
+	switch method {
+	case "GET", "POST", "PUT", "PATCH", "DELETE":
+	default:
+		p.errorf(call.Pos(), "%q: the pattern must start with GET, POST, PUT, PATCH or DELETE", pattern)
+		return
+	}
+	if !strings.HasPrefix(path, "/") {
+		p.errorf(call.Pos(), "%q: the path must start with /", pattern)
+		return
+	}
+	r.query = method == "GET" || method == "DELETE"
+	r.params = pathParams(path)
+
+	switch h := ast.Unparen(call.Args[1]).(type) {
+	case *ast.Ident:
+		r.handler, _ = info.Uses[h].(*types.Func)
+	case *ast.SelectorExpr:
+		if sel := info.Selections[h]; sel != nil {
+			if sel.Kind() == types.MethodVal {
+				r.handler, _ = sel.Obj().(*types.Func)
+			}
+		} else {
+			r.handler, _ = info.Uses[h.Sel].(*types.Func)
+		}
+	}
+	if r.handler == nil {
+		p.errorf(call.Args[1].Pos(), "the handler must be a named function or method, so tether can name the TypeScript function after it")
+		return
+	}
+	r.name = lowerCamel(r.handler.Name())
+	r.doc = p.funcDocs[r.handler.Origin()]
+
+	sig := r.handler.Type().(*types.Signature)
+	params, results := sig.Params(), sig.Results()
+	shapeErr := func() {
+		p.errorf(call.Args[1].Pos(), "%s must have the shape func(*http.Request[, In]) ([Out, ]error)", r.handler.Name())
+	}
+	if params.Len() < 1 || params.Len() > 2 || sig.Variadic() || types.TypeString(params.At(0).Type(), nil) != "*net/http.Request" {
+		shapeErr()
+		return
+	}
+	errType := types.Universe.Lookup("error").Type()
+	switch {
+	case results.Len() == 1 && types.Identical(results.At(0).Type(), errType):
+	case results.Len() == 2 && types.Identical(results.At(1).Type(), errType):
+		r.out = results.At(0).Type()
+		r.file = isTether(r.out, "File")
+	default:
+		shapeErr()
+		return
+	}
+	if params.Len() == 2 {
+		r.in = params.At(1).Type()
+		switch {
+		case isTether(r.in, "Upload"):
+			if r.query {
+				p.errorf(call.Pos(), "%s: an upload needs POST, PUT or PATCH", r.handler.Name())
+				return
+			}
+			r.upload = true
+		default:
+			if _, ok := r.in.Underlying().(*types.Struct); !ok || isPointer(r.in) {
+				p.errorf(call.Args[1].Pos(), "%s: the input must be a struct, not %s", r.handler.Name(), r.in)
+				return
+			}
+		}
+	}
+	p.routes = append(p.routes, r)
+}
+
+func isTether(t types.Type, name string) bool {
+	n, ok := types.Unalias(t).(*types.Named)
+	return ok && n.Obj().Pkg() != nil && n.Obj().Pkg().Path() == tetherPath && n.Obj().Name() == name
+}
+
+func isPointer(t types.Type) bool {
+	_, ok := types.Unalias(t).(*types.Pointer)
+	return ok
+}
+
+func pathParams(path string) []pathParam {
+	var out []pathParam
+	for {
+		i := strings.Index(path, "{")
+		if i < 0 {
+			return out
+		}
+		j := strings.Index(path[i:], "}")
+		if j < 0 {
+			return out
+		}
+		name := path[i+1 : i+j]
+		path = path[i+j+1:]
+		if name == "$" {
+			continue
+		}
+		wild := strings.HasSuffix(name, "...")
+		out = append(out, pathParam{name: strings.TrimSuffix(name, "..."), wildcard: wild})
+	}
+}
+
+// readMessages reads the one Messages call. Its arguments are map literals
+// or package variables initialised with one; the German table that ships
+// with tether is known to the generator directly.
+func (p *program) readMessages(info *types.Info, call *ast.CallExpr) {
+	if p.messages != nil {
+		p.errorf(call.Pos(), "Messages is called more than once; call it in one place")
+		return
+	}
+	p.messages = map[string]string{}
+	for _, arg := range call.Args {
+		table, ok := p.messageTable(info, arg)
+		if !ok {
+			p.errorf(arg.Pos(), "an argument of Messages must be a map literal or a package variable initialised with one")
+			continue
+		}
+		for k, v := range table {
+			p.messages[k] = v
+		}
+	}
+}
+
+func (p *program) messageTable(info *types.Info, e ast.Expr) (map[string]string, bool) {
+	e = ast.Unparen(e)
+	if lit, ok := e.(*ast.CompositeLit); ok {
+		return p.mapLiteral(info, lit)
+	}
+	var id *ast.Ident
+	switch x := e.(type) {
+	case *ast.Ident:
+		id = x
+	case *ast.SelectorExpr:
+		id = x.Sel
+	default:
+		return nil, false
+	}
+	v, ok := info.Uses[id].(*types.Var)
+	if !ok || v.Pkg() == nil {
+		return nil, false
+	}
+	if v.Pkg().Path() == tetherPath+"/messages/de" && v.Name() == "Messages" {
+		return de.Messages, true
+	}
+	init, ok := p.varInits[v]
+	if !ok {
+		return nil, false
+	}
+	lit, ok := ast.Unparen(init).(*ast.CompositeLit)
+	if !ok {
+		return nil, false
+	}
+	return p.mapLiteral(p.infoFor(v), lit)
+}
+
+func (p *program) infoFor(v *types.Var) *types.Info {
+	if pkg := p.roots[v.Pkg()]; pkg != nil {
+		return pkg.TypesInfo
+	}
+	return nil
+}
+
+func (p *program) mapLiteral(info *types.Info, lit *ast.CompositeLit) (map[string]string, bool) {
+	if info == nil {
+		return nil, false
+	}
+	out := map[string]string{}
+	for _, el := range lit.Elts {
+		kv, ok := el.(*ast.KeyValueExpr)
+		if !ok {
+			return nil, false
+		}
+		k, ok1 := p.constString(info, kv.Key)
+		v, ok2 := p.constString(info, kv.Value)
+		if !ok1 || !ok2 {
+			return nil, false
+		}
+		out[k] = v
+	}
+	return out, true
+}
+
+// lowerCamel turns a Go name into a TypeScript one: the leading capitals
+// become lower case, except the last one when it starts the next word
+// (CreateTask: createTask, HTTPGet: httpGet, ID: id).
+func lowerCamel(s string) string {
+	r := []rune(s)
+	n := 0
+	for n < len(r) && r[n] >= 'A' && r[n] <= 'Z' {
+		n++
+	}
+	switch {
+	case n == 0:
+		return s
+	case n == len(r):
+		return strings.ToLower(s)
+	case n > 1:
+		n--
+	}
+	return strings.ToLower(string(r[:n])) + string(r[n:])
+}
+
+// projectRule reports whether name is a rule the project registered.
+func (p *program) projectRule(name string) bool {
+	if _, ok := p.patterns[name]; ok {
+		return true
+	}
+	for _, c := range p.checks {
+		if c == name {
+			return true
+		}
+	}
+	return false
+}

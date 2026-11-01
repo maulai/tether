@@ -1,0 +1,32 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # Node runs the conformance vectors against the TypeScript runtime and
+      # the example's generated client against its server; tsc type-checks
+      # the generated code with the strictest settings.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm install --global typescript@5.9.3
+      - name: Format
+        run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      - run: go test ./...
+        env:
+          TETHER_REQUIRE_NODE: "1"
+          TETHER_TSC: tsc
+      - name: Example is generated
+        working-directory: example/tasks
+        run: go tool tether -out web/src/api -title Tasks -version 1.0.0 -check
