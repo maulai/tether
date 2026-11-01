@@ -6,15 +6,27 @@ import (
 	"mime"
 	"net/http"
 	"reflect"
+	"strconv"
 	"sync"
+	"time"
 )
 
 // File is a handler output sent as raw bytes instead of JSON, such as a PDF
 // or a CSV export.
+//
+// For GET and HEAD, a Body that is an io.ReadSeeker is served with
+// http.ServeContent: Range requests get 206 with only the requested bytes,
+// and If-Range, If-Modified-Since (with ModTime) and If-None-Match (with an
+// ETag set through ResponseHeader) are answered as the standard library
+// does. Any other body is streamed whole.
 type File struct {
 	Name        string    // offered to the browser as the file name
 	ContentType string    // defaults to application/octet-stream
 	Body        io.Reader // closed after writing if it is an io.Closer
+	// ModTime enables Last-Modified and If-Modified-Since; zero leaves them out.
+	ModTime time.Time
+	// Attachment asks the browser to download the file instead of showing it.
+	Attachment bool
 }
 
 // Upload is a handler input read from a multipart form with one file in the
@@ -32,12 +44,14 @@ func writeJSON(w http.ResponseWriter, r *http.Request, status int, v reflect.Val
 		internal(w, r, http.StatusInternalServerError, err)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
+	body = append(body, '\n')
+	own(w.Header(), "application/json")
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
 	w.WriteHeader(status)
-	w.Write(append(body, '\n'))
+	w.Write(body)
 }
 
-func writeFile(w http.ResponseWriter, f File) {
+func writeFile(w http.ResponseWriter, r *http.Request, f File) {
 	if c, ok := f.Body.(io.Closer); ok {
 		defer c.Close()
 	}
@@ -45,10 +59,25 @@ func writeFile(w http.ResponseWriter, f File) {
 	if ct == "" {
 		ct = "application/octet-stream"
 	}
-	w.Header().Set("Content-Type", ct)
+	own(w.Header(), ct)
+	// inline unless asked otherwise: a PDF opens in the browser, which can
+	// still save it.
+	disposition := "inline"
+	if f.Attachment {
+		disposition = "attachment"
+	}
 	if f.Name != "" {
-		// inline: a PDF opens in the browser, which can still save it.
-		w.Header().Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": f.Name}))
+		if v := mime.FormatMediaType(disposition, map[string]string{"filename": f.Name}); v != "" {
+			w.Header().Set("Content-Disposition", v)
+		} else {
+			w.Header().Set("Content-Disposition", disposition)
+		}
+	} else if f.Attachment {
+		w.Header().Set("Content-Disposition", disposition)
+	}
+	if rs, ok := f.Body.(io.ReadSeeker); ok && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+		http.ServeContent(w, r, f.Name, f.ModTime, rs)
+		return
 	}
 	w.WriteHeader(http.StatusOK)
 	if f.Body != nil {

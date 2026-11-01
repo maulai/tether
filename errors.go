@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 )
 
 // issue is one field error as it travels in a response.
@@ -58,9 +59,11 @@ func writeProblem(w http.ResponseWriter, status int, detail string, issues []iss
 		Detail: detail,
 		Errors: issues,
 	})
-	w.Header().Set("Content-Type", "application/problem+json")
+	body = append(body, '\n')
+	own(w.Header(), "application/problem+json")
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
 	w.WriteHeader(status)
-	w.Write(append(body, '\n'))
+	w.Write(body)
 }
 
 func writeIssues(w http.ResponseWriter, issues []issue) {

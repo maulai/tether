@@ -164,7 +164,7 @@ to count together.
 | `Out`, nil error, `GET`, `PUT`, `PATCH`, `DELETE` | `200` with `Out` as JSON |
 | `Out`, nil error, `POST` | `201` with `Out` as JSON |
 | only `error`, nil | `204` without body |
-| `tether.File` | `200` with the raw bytes |
+| `tether.File` | `200` with the raw bytes; `206`, `304` or `416` for range and conditional requests (see below) |
 | non-nil error | see 3.5 |
 
 - A nil slice is written as `[]` and a nil map as `{}`, so the TypeScript
@@ -174,11 +174,27 @@ to count together.
 
 ```go
 type File struct {
-	Name        string    // sent as Content-Disposition: inline; filename=...
+	Name        string    // the file name in Content-Disposition
 	ContentType string    // default application/octet-stream
 	Body        io.Reader // closed after writing if it is an io.Closer
+	ModTime     time.Time // enables Last-Modified and If-Modified-Since
+	Attachment  bool      // download instead of showing it
 }
 ```
+
+**Disposition.** Without `Attachment` the file is shown (`inline`), with it
+the browser downloads it (`attachment`); `Name` is added as the file name,
+encoded per RFC 2231 when it is not plain ASCII (`filename*=utf-8''...`). A
+file with neither sends no `Content-Disposition`.
+
+**Ranges and conditions.** For `GET` and `HEAD`, a `Body` that is an
+`io.ReadSeeker` is served with `http.ServeContent`, which brings from the
+standard library: `Range` with 206 and `Content-Range`, 416 for a range
+outside the file, `If-Range`, `Accept-Ranges`, `Content-Length`,
+`If-Modified-Since` with 304 when `ModTime` is set, and `If-None-Match` with
+304 when the handler set an `ETag` (3.7). Any other body, and any other
+method, is streamed whole with 200. `HEAD` needs no pattern of its own:
+`ServeMux` sends it to the `GET` pattern, and the body is left out.
 
 A nil pointer of a concrete error type inside the `error` result (a
 classic Go mistake when a function returns `*MyError`) counts as no error.
@@ -258,6 +274,32 @@ Projects never call `RegisterEnum` themselves. When reading the source, the
 generator ignores existing `tether_gen.go` files, so a stale one never
 blocks a run, and it removes the file from packages that no longer need it.
 An enum must be declared in one of the packages the generator reads.
+
+### 3.7 Response headers
+
+A handler that needs to set a header, a caching rule, an `ETag` or a cookie,
+gets the response headers from the request; the handler shapes stay the
+same:
+
+```go
+func ResponseHeader(r *http.Request) http.Header
+func SetCookie(r *http.Request, c *http.Cookie) error
+```
+
+- `ResponseHeader` panics for a request that `Route` did not serve: a header
+  that silently goes nowhere is a bug.
+- `SetCookie` adds a `Set-Cookie` header like `http.SetCookie`, but returns
+  an error for an invalid cookie instead of dropping it silently. Returned
+  from the handler, the error becomes a 500 with the cause in the log.
+- **Headers apply to every answer**, an error included, as with `net/http`.
+  Some belong exactly there: `Retry-After` with 429, `WWW-Authenticate` with
+  401, a cookie cleared after a failed sign-in. A handler therefore sets a
+  session cookie only once nothing can fail any more.
+- tether decides `Content-Type`, `Content-Disposition` and `Content-Length`
+  itself and overrides what a handler set; a 204 carries none of them.
+
+Sessions themselves stay out of scope (9); these two functions are what a
+project needs to build them.
 
 ## 4. Validation
 

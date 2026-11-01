@@ -122,6 +122,7 @@ func newHandler(pattern string, fn any) (*handler, error) {
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	r = withResponseHeader(r, w.Header())
 	args := []reflect.Value{reflect.ValueOf(r)}
 	if h.in != nil {
 		in, ok := h.readInput(w, r)
@@ -141,9 +142,10 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case !h.out:
+		own(w.Header(), "")
 		w.WriteHeader(http.StatusNoContent)
 	case h.file:
-		writeFile(w, results[0].Interface().(File))
+		writeFile(w, r, results[0].Interface().(File))
 	case r.Method == http.MethodPost:
 		writeJSON(w, r, http.StatusCreated, results[0])
 	default:

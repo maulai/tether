@@ -79,6 +79,39 @@ Errors are RFC 9457 problem details:
 | `tether.Fail(http.StatusConflict, "…")` | that status, with that message |
 | any other error | 500 with a generic message; the error goes to `log/slog` |
 
+Files are returned as `tether.File`. A body that can seek, such as an
+`*os.File` or an S3 object, answers `Range` requests (a PDF viewer loading
+page by page, a resumed download) and `If-Modified-Since`:
+
+```go
+// Document serves a stored document.
+func Document(r *http.Request) (tether.File, error) {
+	obj, info, err := store.Open(r.Context(), r.PathValue("id"))
+	if err != nil {
+		return tether.File{}, err
+	}
+	return tether.File{Name: info.Name, ContentType: info.Type, Body: obj, ModTime: info.Modified}, nil
+}
+```
+
+Set `Attachment: true` to make the browser download instead of show it.
+
+Headers and cookies are set through the request, and apply to error
+responses too:
+
+```go
+// SignIn starts a session.
+func SignIn(r *http.Request, in Credentials) error {
+	id, err := sessions.Start(r.Context(), in)
+	if err != nil {
+		return err
+	}
+	return tether.SetCookie(r, &http.Cookie{Name: "session", Value: id, HttpOnly: true, Secure: true, Path: "/"})
+}
+```
+
+For other headers: `tether.ResponseHeader(r).Set("Cache-Control", "no-store")`.
+
 ## Generate
 
 ```sh
