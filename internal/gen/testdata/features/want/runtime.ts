@@ -22,6 +22,7 @@ const messages: Record<string, string> = {
   minLength: "Mindestens {min} Zeichen.",
   network: "Der Server ist nicht erreichbar.",
   oneof: "Erlaubt sind: {values}.",
+  range: "Der angeforderte Bereich ist nicht verfügbar.",
   required: "Bitte ausfüllen.",
   requiredif: "Pflichtfeld.",
   text: "Enthält unsichtbare Steuerzeichen.",

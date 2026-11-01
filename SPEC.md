@@ -194,7 +194,14 @@ outside the file, `If-Range`, `Accept-Ranges`, `Content-Length`,
 `If-Modified-Since` with 304 when `ModTime` is set, and `If-None-Match` with
 304 when the handler set an `ETag` (3.7). Any other body, and any other
 method, is streamed whole with 200. `HEAD` needs no pattern of its own:
-`ServeMux` sends it to the `GET` pattern, and the body is left out.
+`ServeMux` sends it to the `GET` pattern, and the body is left out; a body
+that cannot seek is closed without being read, so a file produced while it
+is read (an export through a pipe) stops early. The errors `ServeContent`
+answers itself become problem documents like every other error: 416 with
+message `range` and its `Content-Range` header, 500 with message
+`internal`. A failed seek gives 500, or 416 inside a range, as
+`ServeContent` decides; the seeker's message never reaches the client, and
+with a 500 it goes to the log.
 
 A nil pointer of a concrete error type inside the `error` result (a
 classic Go mistake when a function returns `*MyError`) counts as no error.
@@ -427,6 +434,7 @@ func init() {
 | `tooLarge` | The request is too large. |
 | `internal` | Something went wrong. |
 | `network` | The server cannot be reached. (browser only) |
+| `range` | The requested range is not available. |
 
 ## 6. Generator
 

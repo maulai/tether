@@ -31,6 +31,7 @@ var Default = map[string]string{
 	"tooLarge":    "The request is too large.",
 	"internal":    "Something went wrong.",
 	"network":     "The server cannot be reached.",
+	"range":       "The requested range is not available.",
 }
 
 // Format fills the placeholders of text, {min} and the like, with args.

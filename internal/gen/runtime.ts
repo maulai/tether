@@ -32,6 +32,7 @@ const messages: Record<string, string> = {
   tooLarge: "The request is too large.",
   internal: "Something went wrong.",
   network: "The server cannot be reached.",
+  range: "The requested range is not available.",
 };
 const patterns: Record<string, RegExp> = {};
 const serverOnly: ReadonlySet<string> = new Set<string>([]);

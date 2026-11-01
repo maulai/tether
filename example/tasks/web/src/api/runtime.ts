@@ -22,6 +22,7 @@ const messages: Record<string, string> = {
   minLength: "Must be at least {min} characters.",
   network: "The server cannot be reached.",
   oneof: "Must be one of: {values}.",
+  range: "The requested range is not available.",
   required: "Required.",
   requiredif: "Required.",
   text: "Contains invisible control characters.",

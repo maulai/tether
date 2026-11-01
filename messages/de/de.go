@@ -29,4 +29,5 @@ var Messages = map[string]string{
 	"tooLarge":    "Die Anfrage ist zu groß.",
 	"internal":    "Es ist ein Fehler aufgetreten.",
 	"network":     "Der Server ist nicht erreichbar.",
+	"range":       "Der angeforderte Bereich ist nicht verfügbar.",
 }

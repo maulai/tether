@@ -3,10 +3,12 @@ package tether
 import (
 	"encoding/json"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -76,14 +78,70 @@ func writeFile(w http.ResponseWriter, r *http.Request, f File) {
 		w.Header().Set("Content-Disposition", disposition)
 	}
 	if rs, ok := f.Body.(io.ReadSeeker); ok && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
-		http.ServeContent(w, r, f.Name, f.ModTime, rs)
+		http.ServeContent(&problemWriter{ResponseWriter: w, r: r}, r, f.Name, f.ModTime, rs)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
-	if f.Body != nil {
+	// HEAD sends no body, so it is not read: a file that is produced while
+	// it is read, such as an export through a pipe, stops when it is closed.
+	if f.Body != nil && r.Method != http.MethodHead {
 		io.Copy(w, f.Body)
 	}
 }
+
+// problemWriter turns the error responses http.ServeContent writes itself
+// into tether's problem documents. ServeContent answers them in plain text,
+// and after a failed seek it sends the seeker's error message, which can
+// name internal hosts or buckets. A 416 keeps its Content-Range header.
+type problemWriter struct {
+	http.ResponseWriter
+	r      *http.Request
+	status int // the error status ServeContent chose, 0 while there is none
+}
+
+func (p *problemWriter) WriteHeader(code int) {
+	switch {
+	case p.status != 0:
+	case code < 400:
+		p.ResponseWriter.WriteHeader(code)
+	case code == http.StatusRequestedRangeNotSatisfiable:
+		p.status = code
+		writeProblem(p.ResponseWriter, code, message("range", nil), nil)
+	case code >= 500:
+		p.status = code
+		writeProblem(p.ResponseWriter, code, message("internal", nil), nil)
+	default:
+		p.status = code
+		writeProblem(p.ResponseWriter, code, "", nil)
+	}
+}
+
+// Write swallows the text ServeContent writes with an error; for a server
+// error that text is the cause, so it goes to the log instead.
+func (p *problemWriter) Write(b []byte) (int, error) {
+	if p.status == 0 {
+		return p.ResponseWriter.Write(b)
+	}
+	if p.status >= 500 {
+		slog.ErrorContext(p.r.Context(), "tether: serving a file failed", "method", p.r.Method, "path", p.r.URL.Path, "error", strings.TrimSpace(string(b)))
+	}
+	return len(b), nil
+}
+
+// ReadFrom keeps the fast path of the underlying writer, sendfile for an
+// *os.File, which wrapping would otherwise hide.
+func (p *problemWriter) ReadFrom(src io.Reader) (int64, error) {
+	if p.status != 0 {
+		return io.Copy(io.Discard, src)
+	}
+	if rf, ok := p.ResponseWriter.(io.ReaderFrom); ok {
+		return rf.ReadFrom(src)
+	}
+	return io.Copy(struct{ io.Writer }{p.ResponseWriter}, src)
+}
+
+// Unwrap lets http.ResponseController reach the underlying writer.
+func (p *problemWriter) Unwrap() http.ResponseWriter { return p.ResponseWriter }
 
 // normalize returns v with every nil slice replaced by an empty one and
 // every nil map by an empty map. encoding/json writes nil as null, and the
