@@ -1,0 +1,44 @@
+name: release
+
+# Every push to main that passes ci is released. A Go module is released by
+# its tag alone, so there is nothing to build; the GitHub release only adds
+# notes. The step comes from the commit messages, see scripts/next-version.sh:
+# a trailer line "Release: minor", "Release: major" or "Release: none".
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+# One release at a time, so two quick pushes cannot claim the same version.
+concurrency: release
+
+jobs:
+  release:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+      - name: Next version
+        id: version
+        run: echo "tag=$(.github/scripts/next-version.sh)" >> "$GITHUB_OUTPUT"
+      - name: Tag and release
+        if: steps.version.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          git tag "$TAG"
+          git push origin "$TAG"
+          gh release create "$TAG" --title "$TAG" --generate-notes --verify-tag
+          # Ask the Go module proxy for the new version, so pkg.go.dev lists it
+          # without waiting for the first user.
+          module=$(awk '/^module /{print $2}' go.mod)
+          curl -fsS "https://proxy.golang.org/$module/@v/$TAG.info" || true

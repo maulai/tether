@@ -542,8 +542,13 @@ Validators do not change values. Dates are ISO strings in both directions.
 
 ## 8. Versions
 
-tether uses semantic versioning, `v0.x` until the API is stable. Projects
-pin it as a tool dependency:
+tether uses semantic versioning, `v0.x` until the API is stable. CI
+releases every push to `main` that passes the tests: it tags the next
+version and creates a GitHub release with generated notes. A commit chooses
+the step with a trailer line `Release: minor`, `Release: major`, or
+`Release: none` for changes that need no release (documentation, CI);
+without one the step is a patch. Projects pin a version as a tool
+dependency:
 
 ```
 go get -tool github.com/maulai/tether/cmd/tether@v0.1.0
