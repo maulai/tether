@@ -307,6 +307,55 @@
         "summary": "ExportTasks returns all tasks as CSV."
       }
     },
+    "/v1/tasks/import": {
+      "post": {
+        "operationId": "importTasks",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "properties": {
+                  "file": {
+                    "format": "binary",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Task"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "422": {
+            "$ref": "#/components/responses/Invalid"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "summary": "ImportTasks adds a task for every line of an uploaded text file."
+      }
+    },
     "/v1/tasks/{id}": {
       "delete": {
         "operationId": "deleteTask",

@@ -6,16 +6,18 @@ import (
 	"net/http"
 
 	"github.com/maulai/tether"
+	"github.com/maulai/tether/internal/gen/testdata/mistakes/hidden"
 )
 
 type Input struct {
-	Count  int    `json:"count" v:"required"`
-	Name   string `json:"name" v:"required,bogus"`
-	Rate   string `json:"rate" v:"gt=0"`
-	When   string `json:"when" v:"requiredif=missing:x"`
-	Flag   bool   `json:"flag"`
-	Note   string `json:"note" v:"requiredif=flag:yes"`
-	Things []int  `json:"things" v:"dive,email"`
+	Count  int          `json:"count" v:"required"`
+	Name   string       `json:"name" v:"required,bogus"`
+	Rate   string       `json:"rate" v:"gt=0"`
+	When   string       `json:"when" v:"requiredif=missing:x"`
+	Flag   bool         `json:"flag"`
+	Note   string       `json:"note" v:"requiredif=flag:yes"`
+	Things []int        `json:"things" v:"dive,email"`
+	Level  hidden.Level `json:"level"`
 }
 
 type Filter struct {

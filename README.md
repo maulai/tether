@@ -67,9 +67,19 @@ func(r *http.Request, in In) error
 ```
 
 `In` comes from the query string for `GET` and `DELETE`, and from the JSON
-body otherwise. Path parameters are read as usual: `r.PathValue("id")`.
-tether decodes and validates `In` before your handler runs; invalid input
-never reaches it. `Out` is written as JSON (`201` for `POST`, `200` else).
+body otherwise. tether decodes and validates `In` before your handler runs;
+invalid input never reaches it. `Out` is written as JSON (`201` for `POST`,
+`200` else).
+
+Path parameters are read as usual with `r.PathValue("id")`, or parsed into
+a type; a value that does not parse answers 404 before your code runs:
+
+```go
+id, err := tether.PathValue[uuid.UUID](r, "id") // also ints, enums, time.Time
+if err != nil {
+	return Task{}, err
+}
+```
 
 Errors are RFC 9457 problem details:
 
@@ -78,6 +88,19 @@ Errors are RFC 9457 problem details:
 | `tether.FieldError("title", "…")` (combine several with `errors.Join`) | 422, the message at the field |
 | `tether.Fail(http.StatusConflict, "…")` | that status, with that message |
 | any other error | 500 with a generic message; the error goes to `log/slog` |
+
+Errors of packages you cannot change are translated in one place:
+
+```go
+func init() {
+	tether.MapErrors(func(err error) error {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return tether.Fail(http.StatusNotFound, "Not found.")
+		}
+		return err
+	})
+}
+```
 
 Files are returned as `tether.File`. A body that can seek, such as an
 `*os.File` or an S3 object, answers `Range` requests (a PDF viewer loading
@@ -165,6 +188,10 @@ async function onSubmit(values: TaskInput) {
 
 For a form that edits only some fields: `taskInputSchema.pick("title")`.
 
+A failed request throws `ApiError` (or `ValidationError` for a 422) with the
+response's `headers`, for a request id on an error page or `Retry-After`.
+Across origins, list such headers in `Access-Control-Expose-Headers`.
+
 ## Rules
 
 Rules go in the `v` tag, separated by commas.
@@ -185,8 +212,11 @@ separators; nested structs are validated too. An empty optional text skips
 its rules, and a missing number is `0`, as in Go. For a number that must be
 sent, use a pointer.
 
-**Enums** are plain Go: a string type and its constants. tether finds them;
-the generated `tether_gen.go` registers them for the server.
+**Enums** are plain Go: a string type and its constants, in any package or
+module. tether finds them; the generated `tether_gen.go` in the package of
+the handler registers them for the server, so domain packages need no
+dependency on tether. Constants of an enum in another package must be
+exported.
 
 ## Your own rules
 

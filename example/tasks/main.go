@@ -6,6 +6,8 @@ package main
 //go:generate go tool tether -out web/src/api -title Tasks -version 1.0.0
 
 import (
+	"errors"
+	"io"
 	"log"
 	"net/http"
 	"slices"
@@ -74,11 +76,7 @@ func ListTasks(r *http.Request, f TaskFilter) ([]Task, error) {
 func GetTask(r *http.Request) (Task, error) {
 	mu.Lock()
 	defer mu.Unlock()
-	t, ok := tasks[r.PathValue("id")]
-	if !ok {
-		return Task{}, tether.Fail(http.StatusNotFound, "No such task.")
-	}
-	return t, nil
+	return find(r)
 }
 
 // CreateTask adds a task.
@@ -98,9 +96,9 @@ func CreateTask(r *http.Request, in TaskInput) (Task, error) {
 func UpdateTask(r *http.Request, in TaskInput) (Task, error) {
 	mu.Lock()
 	defer mu.Unlock()
-	t, ok := tasks[r.PathValue("id")]
-	if !ok {
-		return Task{}, tether.Fail(http.StatusNotFound, "No such task.")
+	t, err := find(r)
+	if err != nil {
+		return Task{}, err
 	}
 	if taken(in.Title, t.ID) {
 		return Task{}, tether.FieldError("title", "A task with this title exists already.")
@@ -116,6 +114,31 @@ func DeleteTask(r *http.Request) error {
 	defer mu.Unlock()
 	delete(tasks, r.PathValue("id"))
 	return nil
+}
+
+// ImportTasks adds a task for every line of an uploaded text file.
+func ImportTasks(r *http.Request, f tether.Upload) ([]Task, error) {
+	data, err := io.ReadAll(io.LimitReader(f.Body, 1<<20))
+	if err != nil {
+		return nil, err
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	var added []Task
+	for _, line := range strings.Split(string(data), "\n") {
+		title := strings.TrimSpace(line)
+		if title == "" {
+			continue
+		}
+		if taken(title, "") {
+			return nil, tether.FieldError("file", "A task named "+strconv.Quote(title)+" exists already.")
+		}
+		next++
+		t := Task{ID: strconv.Itoa(next), TaskInput: TaskInput{Title: title, Status: StatusOpen}, CreatedAt: time.Now()}
+		tasks[t.ID] = t
+		added = append(added, t)
+	}
+	return added, nil
 }
 
 // ExportTasks returns all tasks as CSV.
@@ -136,7 +159,7 @@ func main() {
 
 // routes is the whole API: the standard library's router, with one
 // tether.Route per endpoint. Middleware would wrap the mux or a handler.
-func routes() *http.ServeMux {
+func routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle(tether.Route("GET /v1/tasks", ListTasks))
 	mux.Handle(tether.Route("GET /v1/tasks/{id}", GetTask))
@@ -144,7 +167,43 @@ func routes() *http.ServeMux {
 	mux.Handle(tether.Route("PUT /v1/tasks/{id}", UpdateTask))
 	mux.Handle(tether.Route("DELETE /v1/tasks/{id}", DeleteTask))
 	mux.Handle(tether.Route("GET /v1/tasks.csv", ExportTasks))
-	return mux
+	mux.Handle(tether.Route("POST /v1/tasks/import", ImportTasks))
+	return requestID(mux)
+}
+
+// requestID marks every response, so an error page can name the request.
+func requestID(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Request-ID", strconv.FormatInt(time.Now().UnixNano(), 36))
+		next.ServeHTTP(w, r)
+	})
+}
+
+// errNotFound is what the store reports for a missing task. The handlers
+// return it as it is; MapErrors turns it into a 404 in one place.
+var errNotFound = errors.New("task not found")
+
+func init() {
+	tether.MapErrors(func(err error) error {
+		if errors.Is(err, errNotFound) {
+			return tether.Fail(http.StatusNotFound, "No such task.")
+		}
+		return err
+	})
+}
+
+// find returns the task named by the path. PathValue parses the id; a value
+// that is not a number answers 404 before the store is asked.
+func find(r *http.Request) (Task, error) {
+	id, err := tether.PathValue[int](r, "id")
+	if err != nil {
+		return Task{}, err
+	}
+	t, ok := tasks[strconv.Itoa(id)]
+	if !ok {
+		return Task{}, errNotFound
+	}
+	return t, nil
 }
 
 func taken(title, except string) bool {

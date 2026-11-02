@@ -2,7 +2,9 @@
 
 package main
 
-import "github.com/maulai/tether"
+import (
+	"github.com/maulai/tether"
+)
 
 func init() {
 	tether.RegisterEnum(StatusOpen, StatusBlocked, StatusDone)

@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/maulai/tether"
+	"github.com/maulai/tether/internal/gen/testdata/features/catalog"
+	legacycatalog "github.com/maulai/tether/internal/gen/testdata/features/legacy/catalog"
 	"github.com/maulai/tether/messages/de"
 )
 
@@ -54,15 +56,17 @@ type Item struct {
 // ItemInput creates an item.
 type ItemInput struct {
 	// SKU identifies the item.
-	SKU     string            `json:"sku" v:"required,sku" example:"ABC-1234"`
-	EAN     string            `json:"ean" v:"ean13"`
-	Kind    Kind              `json:"kind" v:"required"`
-	Price   *float64          `json:"price" v:"requiredif=kind:product,gt=0"`
-	Count   uint8             `json:"count" v:"max=100"`
-	Labels  map[string]string `json:"labels" v:"dive,max=40"`
-	Stock   map[Kind]int      `json:"stock"`
-	Lines   []Line            `json:"lines" v:"min=1"`
-	Size    string            `json:"size" v:"oneof=s m l"`
+	SKU     string              `json:"sku" v:"required,sku" example:"ABC-1234"`
+	EAN     string              `json:"ean" v:"ean13"`
+	Kind    Kind                `json:"kind" v:"required"`
+	Price   *float64            `json:"price" v:"requiredif=kind:product,gt=0"`
+	Count   uint8               `json:"count" v:"max=100"`
+	Labels  map[string]string   `json:"labels" v:"dive,max=40"`
+	Stock   map[Kind]int        `json:"stock"`
+	Lines   []Line              `json:"lines" v:"min=1"`
+	Size    string              `json:"size" v:"oneof=s m l"`
+	Color   catalog.Color       `json:"color"`
+	Grade   legacycatalog.Grade `json:"grade"`
 	Contact struct {
 		Email string `json:"email" v:"email"`
 		Site  string `json:"site" v:"url"`

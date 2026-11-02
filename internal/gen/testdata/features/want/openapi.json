@@ -33,6 +33,14 @@
       }
     },
     "schemas": {
+      "Color": {
+        "description": "Color is the colour of an item.",
+        "enum": [
+          "red",
+          "blue"
+        ],
+        "type": "string"
+      },
       "FieldError": {
         "properties": {
           "field": {
@@ -52,6 +60,13 @@
           "message"
         ],
         "type": "object"
+      },
+      "Grade": {
+        "enum": [
+          "a",
+          "b"
+        ],
+        "type": "string"
       },
       "Item": {
         "description": "Item is what the API returns.",
@@ -110,6 +125,9 @@
         "additionalProperties": false,
         "description": "ItemInput creates an item.",
         "properties": {
+          "color": {
+            "$ref": "#/components/schemas/Color"
+          },
           "contact": {
             "additionalProperties": false,
             "properties": {
@@ -131,6 +149,9 @@
           "ean": {
             "description": "The server also checks it with the rule ean13.",
             "type": "string"
+          },
+          "grade": {
+            "$ref": "#/components/schemas/Grade"
           },
           "kind": {
             "$ref": "#/components/schemas/Kind",

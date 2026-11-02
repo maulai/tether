@@ -2,8 +2,14 @@
 
 package features
 
-import "github.com/maulai/tether"
+import (
+	"github.com/maulai/tether"
+	"github.com/maulai/tether/internal/gen/testdata/features/catalog"
+	catalog2 "github.com/maulai/tether/internal/gen/testdata/features/legacy/catalog"
+)
 
 func init() {
 	tether.RegisterEnum(KindNone, KindProduct, KindService)
+	tether.RegisterEnum(catalog.ColorRed, catalog.ColorBlue)
+	tether.RegisterEnum(catalog2.GradeA, catalog2.GradeB)
 }

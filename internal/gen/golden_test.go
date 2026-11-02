@@ -42,7 +42,7 @@ func golden(t *testing.T, o Options) {
 func TestGoldenFeatures(t *testing.T) {
 	golden(t, Options{
 		Dir:      root(t),
-		Patterns: []string{"./internal/gen/testdata/features"},
+		Patterns: []string{"./internal/gen/testdata/features", "./internal/gen/testdata/features/catalog"},
 		Out:      "internal/gen/testdata/features/want",
 		OpenAPI:  "internal/gen/testdata/features/want/openapi.json",
 		Title:    "Features",
@@ -62,9 +62,38 @@ func TestGoldenExample(t *testing.T) {
 	})
 }
 
+// TestRemovesOldRegistrations checks that a tether_gen.go which tether
+// wrote into an enum package in an earlier version is removed, and that it
+// does not break reading the program even when it names constants that no
+// longer exist.
+func TestRemovesOldRegistrations(t *testing.T) {
+	dir := root(t)
+	stale := filepath.Join(dir, "internal/gen/testdata/features/catalog", genFile)
+	old := genPrefix + "; DO NOT EDIT.\n\npackage catalog\n\nimport \"github.com/maulai/tether\"\n\nfunc init() { tether.RegisterEnum(ColorGone) }\n"
+	if err := os.WriteFile(stale, []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(stale)
+	files, err := Generate(Options{
+		Dir:      dir,
+		Patterns: []string{"./internal/gen/testdata/features", "./internal/gen/testdata/features/catalog"},
+		Out:      "internal/gen/testdata/features/want",
+		OpenAPI:  "internal/gen/testdata/features/want/openapi.json",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		if f.Path == stale && f.Data == nil {
+			return
+		}
+	}
+	t.Errorf("%s is not marked for removal", stale)
+}
+
 func TestMistakes(t *testing.T) {
 	dir := root(t)
-	_, err := Generate(Options{Dir: dir, Patterns: []string{"./internal/gen/testdata/mistakes"}, Out: "unused"})
+	_, err := Generate(Options{Dir: dir, Patterns: []string{"./internal/gen/testdata/mistakes/..."}, Out: "unused"})
 	if err == nil {
 		t.Fatal("no error")
 	}

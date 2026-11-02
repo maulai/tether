@@ -4,6 +4,13 @@ import { call, schema, url, type RequestOptions, type Schema } from "./runtime";
 
 // ── Enums ─────────────────────────────────────────────────────────────────
 
+/** Color is the colour of an item. */
+export const colorValues = ["red", "blue"] as const;
+export type Color = (typeof colorValues)[number];
+
+export const gradeValues = ["a", "b"] as const;
+export type Grade = (typeof gradeValues)[number];
+
 /** Kind is the kind of an item. */
 export const kindValues = ["product", "service"] as const;
 // "" is a declared value that means "not set"; it is valid but not offered.
@@ -45,6 +52,8 @@ export interface ItemInput {
   stock?: Partial<Record<Kind, number>>;
   lines?: Line[];
   size?: string;
+  color?: Color;
+  grade?: Grade;
   contact?: {
     email?: string;
     site?: string;
@@ -84,6 +93,8 @@ export const itemInputSchema: Schema<ItemInput> = schema<ItemInput>({
   stock: { type: "record", keys: [...kindValues, ""], elem: { type: "number", int: "int" } },
   lines: { type: "array", elem: { type: "object", schema: () => lineSchema }, v: "min=1" },
   size: { type: "string", v: "oneof=s m l" },
+  color: { type: "string", enum: colorValues },
+  grade: { type: "string", enum: gradeValues },
   contact: { type: "object", fields: {
     email: { type: "string", v: "email" },
     site: { type: "string", v: "url" },

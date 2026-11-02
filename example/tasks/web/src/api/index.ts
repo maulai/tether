@@ -90,6 +90,15 @@ export function exportTasksUrl(): string {
 }
 
 /**
+ * ImportTasks adds a task for every line of an uploaded text file.
+ *
+ * POST /v1/tasks/import
+ */
+export function importTasks(file: Blob, options?: RequestOptions): Promise<Task[]> {
+  return call<Task[]>("POST", `/v1/tasks/import`, { file }, options, "json");
+}
+
+/**
  * GetTask returns one task.
  *
  * GET /v1/tasks/{id}

@@ -110,6 +110,9 @@ type model struct {
 	jsonM   *types.Interface
 	inTypes map[*route]*tsType
 	outType map[*route]*tsType
+	// registers lists, per handler package, the enums its handlers' inputs
+	// use; tether_gen.go in that package registers them.
+	registers map[*types.Package][]*enumDef
 }
 
 func newModel(p *program) *model {
@@ -140,7 +143,74 @@ func newModel(p *program) *model {
 	}
 	m.checkInputs()
 	m.checkNames()
+	m.planRegistrations()
 	return m
+}
+
+// planRegistrations decides where enums are registered: in the package of
+// the handler that takes them. Route refers to the handler, so Go links that
+// package, and runs its init, wherever the route is built, in tests too.
+// Enum packages are never written to, so a domain package does not depend on
+// tether and an enum may live in another module or in generated code. No
+// import cycle can arise: the handler package already imports the enum's
+// package, directly or through the types of its input.
+func (m *model) planRegistrations() {
+	m.registers = map[*types.Package][]*enumDef{}
+	need := map[*types.Package]map[*enumDef]bool{}
+	where := map[*types.Package]token.Pos{}
+	for _, r := range m.routes {
+		t := m.inTypes[r]
+		if t == nil {
+			continue
+		}
+		pkg := r.handler.Pkg()
+		if need[pkg] == nil {
+			need[pkg] = map[*enumDef]bool{}
+			where[pkg] = r.handler.Pos()
+		}
+		collectEnums(t, need[pkg], map[*structDef]bool{})
+	}
+	for pkg, set := range need {
+		if len(set) == 0 {
+			continue
+		}
+		if m.roots[pkg] == nil {
+			m.errorf(where[pkg], "handler package %s is outside the packages tether reads; tether writes the enum registration there, so add it to the package patterns", pkg.Path())
+			continue
+		}
+		var list []*enumDef
+		for e := range set {
+			if e.obj.Pkg() != pkg {
+				for _, c := range e.consts {
+					if !c.Exported() {
+						m.errorf(c.Pos(), "constant %s of enum %s is not exported, so package %s cannot register it; export it", c.Name(), e.name, pkg.Path())
+					}
+				}
+			}
+			list = append(list, e)
+		}
+		sort.Slice(list, func(i, j int) bool { return qualified(list[i].obj) < qualified(list[j].obj) })
+		m.registers[pkg] = list
+	}
+}
+
+func collectEnums(t *tsType, set map[*enumDef]bool, seen map[*structDef]bool) {
+	if t == nil {
+		return
+	}
+	if t.enum != nil {
+		set[t.enum] = true // an enum, or the keys of a record
+	}
+	collectEnums(t.elem, set, seen)
+	for _, a := range t.args {
+		collectEnums(a, set, seen)
+	}
+	if t.def != nil && !seen[t.def] {
+		seen[t.def] = true
+		for _, f := range t.def.fields {
+			collectEnums(f.typ, set, seen)
+		}
+	}
 }
 
 // errorf reports at pos, or where the current type is used when the error
@@ -436,9 +506,6 @@ func (m *model) enumFor(named *types.Named) *enumDef {
 	e := &enumDef{name: tn.Name(), obj: tn, consts: consts, doc: m.typeDocs[tn]}
 	for _, c := range consts {
 		e.values = append(e.values, constant.StringVal(c.Val()))
-	}
-	if m.roots[tn.Pkg()] == nil {
-		m.errorf(tn.Pos(), "enum %s.%s is declared outside the packages tether reads; add %s to the package patterns", tn.Pkg().Name(), tn.Name(), tn.Pkg().Path())
 	}
 	m.enums[tn] = e
 	return e

@@ -21,6 +21,7 @@ const messages: Record<string, string> = {
   minItems: "Must contain at least {min} entries.",
   minLength: "Must be at least {min} characters.",
   network: "The server cannot be reached.",
+  notFound: "Not found.",
   oneof: "Must be one of: {values}.",
   range: "The requested range is not available.",
   required: "Required.",
@@ -45,22 +46,29 @@ export interface FieldError {
   message: string;
 }
 
-/** A failed request. status is 0 when the server could not be reached. */
+/**
+ * A failed request. status is 0 when the server could not be reached.
+ * headers are the headers of the failed response, for a request id on an
+ * error page or Retry-After with 429; across origins the browser shows only
+ * those the server lists in Access-Control-Expose-Headers.
+ */
 export class ApiError extends Error {
   readonly status: number;
   readonly errors: FieldError[];
-  constructor(status: number, message: string, errors: FieldError[] = []) {
+  readonly headers: Headers;
+  constructor(status: number, message: string, errors: FieldError[] = [], headers: Headers = new Headers()) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.errors = errors;
+    this.headers = headers;
   }
 }
 
 /** A 422: the input failed validation; errors names the fields. */
 export class ValidationError extends ApiError {
-  constructor(message: string, errors: FieldError[]) {
-    super(422, message, errors);
+  constructor(message: string, errors: FieldError[], headers: Headers = new Headers()) {
+    super(422, message, errors, headers);
     this.name = "ValidationError";
   }
 }
@@ -149,7 +157,7 @@ export async function call<T>(
     if (e instanceof DOMException && e.name === "AbortError") throw e;
     throw new ApiError(0, format("network"));
   }
-  if (!res.ok) throw failure(res.status, await res.text());
+  if (!res.ok) throw failure(res.status, await res.text(), res.headers);
   if (result === "none" || res.status === 204) return undefined as T;
   if (result === "blob") return (await res.blob()) as T;
   return (await res.json()) as T;
@@ -173,7 +181,9 @@ function upload<T>(
       if (e.lengthComputable) options.onProgress?.(e.loaded / e.total);
     };
     xhr.onload = () => {
-      if (xhr.status < 200 || xhr.status >= 300) return reject(failure(xhr.status, xhr.responseText));
+      if (xhr.status < 200 || xhr.status >= 300) {
+        return reject(failure(xhr.status, xhr.responseText, parseHeaders(xhr.getAllResponseHeaders())));
+      }
       resolve((xhr.status === 204 || !xhr.responseText ? undefined : JSON.parse(xhr.responseText)) as T);
     };
     xhr.onerror = () => reject(new ApiError(0, format("network")));
@@ -182,7 +192,18 @@ function upload<T>(
   });
 }
 
-function failure(status: number, text: string): ApiError {
+// parseHeaders reads the header block XMLHttpRequest returns, one
+// "name: value" per line.
+function parseHeaders(block: string): Headers {
+  const headers = new Headers();
+  for (const line of block.split("\r\n")) {
+    const colon = line.indexOf(":");
+    if (colon > 0) headers.append(line.slice(0, colon).trim(), line.slice(colon + 1).trim());
+  }
+  return headers;
+}
+
+function failure(status: number, text: string, headers: Headers): ApiError {
   let detail = "";
   let errors: FieldError[] = [];
   try {
@@ -193,7 +214,7 @@ function failure(status: number, text: string): ApiError {
     // not a problem document; keep the generic text
   }
   const message = detail || format(status >= 500 ? "internal" : "invalid");
-  return status === 422 ? new ValidationError(message, errors) : new ApiError(status, message, errors);
+  return status === 422 ? new ValidationError(message, errors, headers) : new ApiError(status, message, errors, headers);
 }
 
 // ── Validation ──────────────────────────────────────────────────────────────

@@ -30,4 +30,5 @@ var Messages = map[string]string{
 	"internal":    "Es ist ein Fehler aufgetreten.",
 	"network":     "Der Server ist nicht erreichbar.",
 	"range":       "Der angeforderte Bereich ist nicht verfügbar.",
+	"notFound":    "Nicht gefunden.",
 }
