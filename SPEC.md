@@ -612,7 +612,11 @@ configure({
 (the problem's `detail`), `errors` (field errors) and `headers` (the
 response's headers, for a request id or `Retry-After`; empty for a network
 failure). A `422` throws `ValidationError`, a subclass. A network failure
-throws `ApiError` with status `0`. Across origins, the browser exposes only
+throws `ApiError` with status `0`. Aborting through `options.signal` is
+never an `ApiError`: the request rejects with the signal's reason, as
+`fetch` does (an `AbortError`, or a `TimeoutError` for
+`AbortSignal.timeout`), an upload with progress too, and a signal that is
+already aborted sends nothing. Across origins, the browser exposes only
 the headers the server lists in `Access-Control-Expose-Headers`.
 
 ```ts

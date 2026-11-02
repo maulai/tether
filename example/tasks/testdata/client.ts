@@ -82,6 +82,8 @@ class FakeXHR {
   upload: { onprogress: ((e: { lengthComputable: boolean; loaded: number; total: number }) => void) | null } = { onprogress: null };
   onload: (() => void) | null = null;
   onerror: (() => void) | null = null;
+  onabort: (() => void) | null = null;
+  private stop = new AbortController();
   private method = "";
   private address = "";
   private sent = new Headers();
@@ -98,17 +100,26 @@ class FakeXHR {
   }
   send(body: FormData) {
     this.upload.onprogress?.({ lengthComputable: true, loaded: 1, total: 1 });
-    fetch(this.address, { method: this.method, headers: this.sent, body }).then(
+    // Like a browser, an aborted request goes no further and reports only
+    // the abort.
+    if (this.stop.signal.aborted) return;
+    fetch(this.address, { method: this.method, headers: this.sent, body, signal: this.stop.signal }).then(
       async (res) => {
         this.status = res.status;
         this.responseText = await res.text();
         this.received = res.headers;
         this.onload?.();
       },
-      () => this.onerror?.(),
+      () => {
+        if (!this.stop.signal.aborted) this.onerror?.();
+      },
     );
   }
-  abort() {}
+  abort() {
+    if (this.stop.signal.aborted) return;
+    this.stop.abort();
+    this.onabort?.();
+  }
 }
 (globalThis as unknown as { XMLHttpRequest: unknown }).XMLHttpRequest = FakeXHR;
 
@@ -126,5 +137,21 @@ try {
 }
 // Without onProgress the upload goes through fetch.
 assert.equal((await importTasks(new Blob(["Gamma"]))).length, 1);
+
+// Aborting an upload settles it with the signal's reason, as fetch does.
+const controller = new AbortController();
+await assert.rejects(
+  importTasks(new Blob(["Delta"]), { signal: controller.signal, onProgress: () => controller.abort() }),
+  { name: "AbortError" },
+);
+// A signal aborted before the call sends nothing, on both paths, and a
+// timeout arrives as itself, not as an unreachable server.
+const count = (await listTasks()).length;
+const late = () => AbortSignal.abort(new DOMException("Too slow.", "TimeoutError"));
+await assert.rejects(importTasks(new Blob(["Epsilon"]), { signal: AbortSignal.abort(), onProgress: () => {} }), { name: "AbortError" });
+await assert.rejects(importTasks(new Blob(["Epsilon"]), { signal: late(), onProgress: () => {} }), { name: "TimeoutError" });
+await assert.rejects(importTasks(new Blob(["Epsilon"]), { signal: late() }), { name: "TimeoutError" });
+await assert.rejects(exportTasks({ signal: late() }), { name: "TimeoutError" });
+assert.equal((await listTasks()).length, count);
 
 console.log("client ok");

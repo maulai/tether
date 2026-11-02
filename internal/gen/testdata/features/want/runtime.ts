@@ -138,6 +138,11 @@ export async function call<T>(
   options: RequestOptions | undefined,
   result: "json" | "blob" | "none",
 ): Promise<T> {
+  // fetch rejects at once for a signal that is already aborted. Checking
+  // here does the same for an upload, whose abort event has fired then and
+  // would never reach its listener, and spares Node.js, whose fetch crashes
+  // the process for a form body with such a signal.
+  if (options?.signal?.aborted) throw options.signal.reason;
   const headers: Record<string, string> = { ...config.headers?.(), ...options?.headers };
   let body: BodyInit | undefined;
   if (payload.file !== undefined) {
@@ -159,7 +164,10 @@ export async function call<T>(
   try {
     res = await (config.fetch ?? fetch)(url(path, payload.query), init);
   } catch (e) {
-    if (e instanceof DOMException && e.name === "AbortError") throw e;
+    // An abort is the caller's decision, not a failure of the API: it is
+    // passed on as fetch reports it, with the signal's reason, which is a
+    // TimeoutError for AbortSignal.timeout.
+    if (options?.signal?.aborted || (e instanceof DOMException && e.name === "AbortError")) throw e;
     throw new ApiError(0, format("network"));
   }
   if (!res.ok) throw failure(res.status, await res.text(), res.headers);
@@ -177,8 +185,13 @@ function upload<T>(
   headers: Record<string, string>,
   options: RequestOptions,
 ): Promise<T> {
+  const signal = options.signal;
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
+    const abort = () => xhr.abort();
+    // Every way out removes the listener, so a signal shared by many uploads
+    // does not keep the finished ones alive.
+    const done = () => signal?.removeEventListener("abort", abort);
     xhr.open(method, address);
     xhr.withCredentials = config.credentials === "include";
     for (const [k, v] of Object.entries(headers)) xhr.setRequestHeader(k, v);
@@ -186,13 +199,26 @@ function upload<T>(
       if (e.lengthComputable) options.onProgress?.(e.loaded / e.total);
     };
     xhr.onload = () => {
+      done();
       if (xhr.status < 200 || xhr.status >= 300) {
         return reject(failure(xhr.status, xhr.responseText, parseHeaders(xhr.getAllResponseHeaders())));
       }
-      resolve((xhr.status === 204 || !xhr.responseText ? undefined : JSON.parse(xhr.responseText)) as T);
+      // A throw inside an event handler would leave the promise pending.
+      try {
+        resolve((xhr.status === 204 || !xhr.responseText ? undefined : JSON.parse(xhr.responseText)) as T);
+      } catch (e) {
+        reject(e);
+      }
     };
-    xhr.onerror = () => reject(new ApiError(0, format("network")));
-    options.signal?.addEventListener("abort", () => xhr.abort());
+    xhr.onerror = () => {
+      done();
+      reject(new ApiError(0, format("network")));
+    };
+    xhr.onabort = () => {
+      done();
+      reject(signal?.reason ?? new DOMException("The upload was aborted.", "AbortError"));
+    };
+    signal?.addEventListener("abort", abort, { once: true });
     xhr.send(form);
   });
 }
