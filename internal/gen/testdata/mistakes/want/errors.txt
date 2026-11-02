@@ -1,4 +1,4 @@
-15 problem(s):
+16 problem(s):
   internal/gen/testdata/mistakes/hidden/hidden.go:8:2: constant levelLow of enum Level is not exported, so package github.com/maulai/tether/internal/gen/testdata/mistakes cannot register it; export it
   internal/gen/testdata/mistakes/mistakes.go:13:2: Input.count: required on a plain integer cannot tell a missing value from 0; use a pointer, or min to forbid zero
   internal/gen/testdata/mistakes/mistakes.go:14:2: Input.name: unknown rule "bogus"
@@ -14,3 +14,4 @@
   internal/gen/testdata/mistakes/mistakes.go:47:26: this argument must be a string constant, so tether can read it
   internal/gen/testdata/mistakes/mistakes.go:48:43: the handler must be a named function or method, so tether can name the TypeScript function after it
   internal/gen/testdata/mistakes/mistakes.go:49:13: "FETCH /x": the pattern must start with GET, POST, PUT, PATCH or DELETE
+  internal/gen/testdata/mistakes/mistakes.go:53:31: rule blank needs a message

@@ -173,7 +173,7 @@
             "items": {
               "maxLength": 30,
               "minLength": 1,
-              "pattern": "\\S",
+              "pattern": "^(?:[0-9a-z]+(?:-[0-9a-z]+)*)$",
               "type": "string"
             },
             "maxItems": 5,

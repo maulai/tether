@@ -48,3 +48,7 @@ func Routes(mux *http.ServeMux) {
 	mux.Handle(tether.Route("POST /closure", func(r *http.Request) error { return nil }))
 	mux.Handle(tether.Route("FETCH /x", Delete))
 }
+
+func init() {
+	tether.Pattern("blank", `x`, "")
+}

@@ -53,7 +53,7 @@ export const taskInputSchema: Schema<TaskInput> = schema<TaskInput>({
   status: { type: "string", enum: statusValues, v: "required" },
   reason: { type: "string", v: "requiredif=status:blocked,max=500" },
   due: { type: "datetime", nullable: true },
-  tags: { type: "array", elem: { type: "string" }, v: "max=5,dive,required,max=30" },
+  tags: { type: "array", elem: { type: "string" }, v: "max=5,dive,required,max=30,tag" },
 });
 
 // ── Routes ────────────────────────────────────────────────────────────────

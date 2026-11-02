@@ -26,13 +26,16 @@ const messages: Record<string, string> = {
   range: "The requested range is not available.",
   required: "Required.",
   requiredif: "Required.",
+  tag: "Use lower case letters, digits and dashes.",
   text: "Contains invisible control characters.",
   tooLarge: "The request is too large.",
   type: "Invalid value.",
   unknown: "Unknown field.",
   url: "Must be a web address starting with http:// or https://.",
 };
-const patterns: Record<string, RegExp> = {};
+const patterns: Record<string, RegExp> = {
+  tag: /^(?:[0-9a-z]+(?:-[0-9a-z]+)*)$/u,
+};
 const serverOnly: ReadonlySet<string> = new Set<string>([]);
 
 // ── Errors ──────────────────────────────────────────────────────────────────

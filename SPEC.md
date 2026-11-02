@@ -445,8 +445,10 @@ func init() {
 | `Check(name, fn func(string) bool, message)` | server only | for checks a pattern cannot express, such as check digits |
 
 Both apply to strings only. Tags use them by name: `v:"required,hexColor"`.
-A name must not collide with a built-in rule. `message` is the default text;
-`Messages` can override it like any other.
+A name must not collide with a built-in rule. `message` is the default text
+and must not be empty; `Messages` can override it like any other. The
+generator copies a `Pattern`'s text into the TypeScript runtime (5); a
+`Check`'s text stays on the server, the only side that reports it.
 
 ## 5. Messages
 
@@ -470,8 +472,10 @@ func init() {
 - There is at most one `Messages` call per program; the generator reports a
   second one. Its arguments must be map literals or package level variables
   initialised with map literals, so the generator can read them.
-- The generator copies the effective table into the TypeScript runtime, so
-  the browser produces the same texts as the server.
+- The generator copies the effective table into the TypeScript runtime, in
+  the order the server looks a text up: the built-in texts, then each
+  `Pattern`'s message, then `Messages`. The browser produces the same texts
+  as the server.
 - Placeholders in braces are replaced with the rule's argument: `{min}`,
   `{max}`, `{gt}`, `{lt}`, `{values}`.
 
@@ -496,7 +500,7 @@ func init() {
 | `email` | Must be a valid email address. |
 | `url` | Must be a web address starting with http:// or https://. |
 | `invalid` | Please check the marked fields. |
-| `malformed` | The request body is not valid JSON. |
+| `malformed` | The request body could not be read. |
 | `tooLarge` | The request is too large. |
 | `internal` | Something went wrong. |
 | `network` | The server cannot be reached. (browser only) |

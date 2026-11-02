@@ -18,9 +18,9 @@ import (
 type color string
 
 type vectors struct {
-	Patterns map[string]struct{ Go, JS string } `json:"patterns"`
-	Checks   []string                           `json:"checks"`
-	Cases    []vectorCase                       `json:"cases"`
+	Patterns map[string]struct{ Go, JS, Message string } `json:"patterns"`
+	Checks   []string                                    `json:"checks"`
+	Cases    []vectorCase                                `json:"cases"`
 }
 
 type vectorCase struct {
@@ -38,9 +38,12 @@ type vectorField struct {
 	Fields []vectorField `json:"fields"`
 }
 
+// vectorError is one expected error. Message is compared only where a case
+// gives it.
 type vectorError struct {
-	Field string `json:"field"`
-	Rule  string `json:"rule"`
+	Field   string `json:"field"`
+	Rule    string `json:"rule"`
+	Message string `json:"message,omitempty"`
 }
 
 func loadVectors(t *testing.T) vectors {
@@ -67,7 +70,7 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	for name, p := range v.Patterns {
-		Pattern(name, p.Go, "Wrong format.")
+		Pattern(name, p.Go, p.Message)
 	}
 	for _, name := range v.Checks {
 		Check(name, func(s string) bool { return len(s)%2 == 0 }, "Needs an even length.")
@@ -92,16 +95,20 @@ func TestConformance(t *testing.T) {
 			if len(issues) == 0 {
 				issues = validate(in, plan)
 			}
-			got := []vectorError{}
-			for _, is := range issues {
-				got = append(got, vectorError{is.Field, is.Rule})
-				if is.Message == "" {
-					t.Errorf("%s: empty message", is.Field)
-				}
-			}
 			want := c.Errors
 			if want == nil {
 				want = []vectorError{}
+			}
+			got := []vectorError{}
+			for i, is := range issues {
+				e := vectorError{Field: is.Field, Rule: is.Rule}
+				if i < len(want) && want[i].Message != "" {
+					e.Message = is.Message
+				}
+				got = append(got, e)
+				if is.Message == "" {
+					t.Errorf("%s: empty message", is.Field)
+				}
 			}
 			if !reflect.DeepEqual(got, want) {
 				t.Errorf("got %v, want %v", got, want)

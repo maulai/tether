@@ -6,8 +6,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
-
-	"github.com/maulai/tether/internal/msgs"
 )
 
 // TestRuntimeConformance runs the shared vectors against the TypeScript
@@ -27,15 +25,17 @@ func TestRuntimeConformance(t *testing.T) {
 		t.Fatal(err)
 	}
 	var v struct {
-		Patterns map[string]struct{ JS string } `json:"patterns"`
-		Checks   []string                       `json:"checks"`
+		Patterns map[string]struct{ Go, JS, Message string } `json:"patterns"`
+		Checks   []string                                    `json:"checks"`
 	}
 	if err := json.Unmarshal(data, &v); err != nil {
 		t.Fatal(err)
 	}
-	patterns := map[string]string{}
+	patterns := map[string]pattern{}
+	js := map[string]string{}
 	for name, p := range v.Patterns {
-		patterns[name] = p.JS
+		patterns[name] = pattern{expr: p.Go, message: p.Message}
+		js[name] = p.JS
 	}
 
 	dir := t.TempDir()
@@ -44,7 +44,7 @@ func TestRuntimeConformance(t *testing.T) {
 		t.Fatal(err)
 	}
 	write(t, filepath.Join(dir, "conformance.ts"), runner)
-	write(t, filepath.Join(dir, "runtime.ts"), renderRuntime("// test", msgs.Default, patterns, v.Checks))
+	write(t, filepath.Join(dir, "runtime.ts"), renderRuntime("// test", messageTable(patterns, nil), js, v.Checks))
 
 	out, err := exec.Command(node, filepath.Join(dir, "conformance.ts"), vectorsPath).CombinedOutput()
 	t.Logf("%s", out)

@@ -1,7 +1,7 @@
 {
   "patterns": {
-    "hexColor": { "go": "#[0-9a-fA-F]{6}", "js": "#[0-9A-Fa-f]{6}" },
-    "code": { "go": "(?i)ab\\d", "js": "[Aa][Bb][0-9]" }
+    "hexColor": { "go": "#[0-9a-fA-F]{6}", "js": "#[0-9A-Fa-f]{6}", "message": "Use a colour like #1a2b3c." },
+    "code": { "go": "(?i)ab\\d", "js": "[Aa][Bb][0-9]", "message": "Use a code like AB1." }
   },
   "checks": ["even"],
   "cases": [
@@ -63,7 +63,7 @@
     { "name": "nested field", "fields": [{ "name": "owner", "type": "object", "tag": "", "fields": [{ "name": "name", "type": "string", "tag": "required" }] }], "input": { "owner": { "name": "" } }, "errors": [{ "field": "owner.name", "rule": "required" }] },
     { "name": "nested unknown field", "fields": [{ "name": "owner", "type": "object", "tag": "", "fields": [{ "name": "name", "type": "string", "tag": "" }] }], "input": { "owner": { "nam": "x" } }, "errors": [{ "field": "owner.nam", "rule": "unknown" }], "browser": [] },
     { "name": "list of objects", "fields": [{ "name": "items", "type": "[]object", "tag": "", "fields": [{ "name": "sku", "type": "string", "tag": "required" }] }], "input": { "items": [{ "sku": "a" }, { "sku": "" }] }, "errors": [{ "field": "items.1.sku", "rule": "required" }] },
-    { "name": "dive rules on elements", "fields": [{ "name": "tags", "type": "[]string", "tag": "min=1,dive,required,max=3" }], "input": { "tags": ["ok", "", "toolong"] }, "errors": [{ "field": "tags.1", "rule": "required" }, { "field": "tags.2", "rule": "maxLength" }] },
+    { "name": "dive rules on elements", "fields": [{ "name": "tags", "type": "[]string", "tag": "min=1,dive,required,max=3" }], "input": { "tags": ["ok", "", "toolong"] }, "errors": [{ "field": "tags.1", "rule": "required", "message": "Required." }, { "field": "tags.2", "rule": "maxLength", "message": "Must be at most 3 characters." }] },
     { "name": "dive applies to empty elements", "fields": [{ "name": "tags", "type": "[]string", "tag": "dive,min=2" }], "input": { "tags": [""] }, "errors": [{ "field": "tags.0", "rule": "minLength" }] },
     { "name": "list rule before elements", "fields": [{ "name": "tags", "type": "[]string", "tag": "min=2,dive,max=1" }], "input": { "tags": ["ab"] }, "errors": [{ "field": "tags", "rule": "minItems" }] },
     { "name": "min skips an empty optional list", "fields": [{ "name": "tags", "type": "[]string", "tag": "min=1" }], "input": { "tags": [] }, "errors": [] },
@@ -102,9 +102,10 @@
     { "name": "condition on a nil pointer, negated", "fields": [{ "name": "kind", "type": "*string", "tag": "" }, { "name": "note", "type": "string", "tag": "forbiddenif=kind:!invoice" }], "input": { "note": "x" }, "errors": [{ "field": "note", "rule": "forbiddenif" }] },
 
     { "name": "pattern matches", "fields": [{ "name": "color", "type": "string", "tag": "hexColor" }], "input": { "color": "#12ab3F" }, "errors": [] },
-    { "name": "pattern too short", "fields": [{ "name": "color", "type": "string", "tag": "hexColor" }], "input": { "color": "#12ab3" }, "errors": [{ "field": "color", "rule": "hexColor" }] },
+    { "name": "pattern too short", "fields": [{ "name": "color", "type": "string", "tag": "hexColor" }], "input": { "color": "#12ab3" }, "errors": [{ "field": "color", "rule": "hexColor", "message": "Use a colour like #1a2b3c." }] },
     { "name": "pattern must match the whole value", "fields": [{ "name": "color", "type": "string", "tag": "hexColor" }], "input": { "color": "x#123456" }, "errors": [{ "field": "color", "rule": "hexColor" }] },
     { "name": "pattern case folding", "fields": [{ "name": "code", "type": "string", "tag": "code" }], "input": { "code": "aB7" }, "errors": [] },
+    { "name": "pattern reports its own message", "fields": [{ "name": "code", "type": "string", "tag": "code" }], "input": { "code": "ac7" }, "errors": [{ "field": "code", "rule": "code", "message": "Use a code like AB1." }] },
     { "name": "pattern skips an empty optional value", "fields": [{ "name": "color", "type": "string", "tag": "hexColor" }], "input": { "color": "" }, "errors": [] },
     { "name": "check runs on the server only", "fields": [{ "name": "code", "type": "string", "tag": "even" }], "input": { "code": "abc" }, "errors": [{ "field": "code", "rule": "even" }], "browser": [] }
   ]

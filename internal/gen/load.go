@@ -37,10 +37,16 @@ type program struct {
 	infoOf   map[*ast.File]*types.Info
 
 	routes   []*route
-	patterns map[string]string // name -> Go expression
+	patterns map[string]pattern // by rule name
 	checks   []string
 	messages map[string]string // nil: no Messages call
 	errs     []string
+}
+
+// pattern is one tether.Pattern call.
+type pattern struct {
+	expr    string // Go regular expression
+	message string // the text for a value that does not match
 }
 
 type route struct {
@@ -101,7 +107,7 @@ func load(dir string, patterns []string) (*program, error) {
 		varDocs:  map[*types.Var]string{},
 		varInits: map[*types.Var]ast.Expr{},
 		infoOf:   map[*ast.File]*types.Info{},
-		patterns: map[string]string{},
+		patterns: map[string]pattern{},
 	}
 	var loadErrs []string
 	for _, pkg := range pkgs {
@@ -211,16 +217,18 @@ func (p *program) scan(info *types.Info, f *ast.File) {
 		case "Pattern":
 			name, ok1 := p.constString(info, call.Args[0])
 			expr, ok2 := p.constString(info, call.Args[1])
-			p.constString(info, call.Args[2])
-			if ok1 && ok2 {
+			msg, ok3 := p.ruleMessage(info, call.Args[2], name)
+			if ok1 && ok2 && ok3 {
 				if _, dup := p.patterns[name]; dup {
 					p.errorf(call.Pos(), "rule %s registered twice", name)
 				}
-				p.patterns[name] = expr
+				p.patterns[name] = pattern{expr: expr, message: msg}
 			}
 		case "Check":
+			// The browser never reports a Check, so its message stays on the
+			// server; it is read only to catch what the server rejects.
 			name, ok := p.constString(info, call.Args[0])
-			p.constString(info, call.Args[2])
+			p.ruleMessage(info, call.Args[2], name)
 			if ok {
 				p.checks = append(p.checks, name)
 			}
@@ -257,6 +265,17 @@ func (p *program) constString(info *types.Info, e ast.Expr) (string, bool) {
 		return "", false
 	}
 	return constant.StringVal(tv.Value), true
+}
+
+// ruleMessage reads the message of a project rule, which must not be empty,
+// as the server insists at start-up.
+func (p *program) ruleMessage(info *types.Info, e ast.Expr, name string) (string, bool) {
+	msg, ok := p.constString(info, e)
+	if ok && msg == "" {
+		p.errorf(e.Pos(), "rule %s needs a message", name)
+		return "", false
+	}
+	return msg, ok
 }
 
 func (p *program) route(info *types.Info, call *ast.CallExpr) {

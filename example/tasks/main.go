@@ -30,6 +30,12 @@ const (
 	StatusDone    Status = "done"
 )
 
+// A rule of this project: the server checks it, and the generated client
+// checks it in the browser with the same message.
+func init() {
+	tether.Pattern("tag", `[a-z0-9]+(?:-[a-z0-9]+)*`, "Use lower case letters, digits and dashes.")
+}
+
 // TaskInput is what a form sends to create or change a task.
 type TaskInput struct {
 	// Title is a short, unique name.
@@ -38,7 +44,7 @@ type TaskInput struct {
 	// Reason says why a blocked task cannot go on.
 	Reason string     `json:"reason" v:"requiredif=status:blocked,max=500"`
 	Due    *time.Time `json:"due"`
-	Tags   []string   `json:"tags" v:"max=5,dive,required,max=30"`
+	Tags   []string   `json:"tags" v:"max=5,dive,required,max=30,tag"`
 }
 
 // Task is a task as the API returns it.

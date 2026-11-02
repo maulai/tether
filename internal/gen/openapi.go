@@ -406,8 +406,8 @@ func (o *openAPI) rules(s obj, rules []vtag.Rule, t *tsType) []string {
 		case "oneof":
 			s["enum"] = strings.Fields(r.Arg)
 		default:
-			if expr, ok := o.m.patterns[r.Name]; ok {
-				if js, err := jsregex.Translate(expr); err == nil {
+			if pt, ok := o.m.patterns[r.Name]; ok {
+				if js, err := jsregex.Translate(pt.expr); err == nil {
 					s["pattern"] = "^(?:" + js + ")$"
 				}
 			} else {

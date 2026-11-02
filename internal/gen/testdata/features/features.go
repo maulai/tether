@@ -15,8 +15,9 @@ import (
 
 func init() {
 	tether.Pattern("sku", `[A-Z]{3}-\d{4}`, "Use a code like ABC-1234.")
+	tether.Pattern("zip", `\d{5}`, "Use five digits.") // replaced by Messages below
 	tether.Check("ean13", func(s string) bool { return len(s) == 13 }, "Not a valid EAN-13.")
-	tether.Messages(de.Messages, map[string]string{"required": "Bitte ausfüllen."})
+	tether.Messages(de.Messages, map[string]string{"required": "Bitte ausfüllen.", "zip": "Bitte fünf Ziffern."})
 }
 
 // Kind is the kind of an item.

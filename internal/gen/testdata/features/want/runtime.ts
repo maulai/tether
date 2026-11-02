@@ -26,14 +26,17 @@ const messages: Record<string, string> = {
   range: "Der angeforderte Bereich ist nicht verfügbar.",
   required: "Bitte ausfüllen.",
   requiredif: "Pflichtfeld.",
+  sku: "Use a code like ABC-1234.",
   text: "Enthält unsichtbare Steuerzeichen.",
   tooLarge: "Die Anfrage ist zu groß.",
   type: "Ungültiger Wert.",
   unknown: "Unbekanntes Feld.",
   url: "Bitte eine Adresse mit http:// oder https:// angeben.",
+  zip: "Bitte fünf Ziffern.",
 };
 const patterns: Record<string, RegExp> = {
   sku: /^(?:[A-Z]{3}-[0-9]{4})$/u,
+  zip: /^(?:[0-9]{5})$/u,
 };
 const serverOnly: ReadonlySet<string> = new Set<string>(["ean13"]);
 

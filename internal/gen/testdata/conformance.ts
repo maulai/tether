@@ -11,12 +11,19 @@ interface VectorField {
   fields?: VectorField[];
 }
 
+// message is compared only where a case gives it.
+interface VectorError {
+  field: string;
+  rule: string;
+  message?: string;
+}
+
 interface VectorCase {
   name: string;
   fields: VectorField[];
   input: unknown;
-  errors: { field: string; rule: string }[];
-  browser?: { field: string; rule: string }[];
+  errors: VectorError[];
+  browser?: VectorError[];
 }
 
 const colors = ["red", "green", "blue"];
@@ -63,10 +70,10 @@ function specs(fields: VectorField[]): Record<string, FieldSpec> {
 const vectors: { cases: VectorCase[] } = JSON.parse(readFileSync(process.argv[2], "utf8"));
 let failed = 0;
 for (const c of vectors.cases) {
+  const want = c.browser ?? c.errors;
   const got = schema(specs(c.fields))
     .validate(c.input)
-    .map((e) => ({ field: e.field, rule: e.rule }));
-  const want = c.browser ?? c.errors;
+    .map((e, i) => (want[i]?.message ? { field: e.field, rule: e.rule, message: e.message } : { field: e.field, rule: e.rule }));
   if (JSON.stringify(got) !== JSON.stringify(want)) {
     failed++;
     console.log(`FAIL ${c.name}\n  got  ${JSON.stringify(got)}\n  want ${JSON.stringify(want)}`);

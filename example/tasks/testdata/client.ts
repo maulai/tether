@@ -10,7 +10,7 @@ assert.equal(task.title, "Write the README");
 assert.deepEqual(task.tags, ["docs"]);
 
 // The browser and the server report the same errors for the same input.
-const bad = { title: " ", status: "blocked" as const, tags: ["", "x".repeat(31)] };
+const bad = { title: " ", status: "blocked" as const, tags: ["", "x".repeat(31), "Docs"] };
 const local = taskInputSchema.validate(bad);
 try {
   await createTask(bad);
@@ -21,8 +21,10 @@ try {
 }
 assert.deepEqual(
   local.map((e) => e.field + ":" + e.rule),
-  ["title:required", "reason:requiredif", "tags.0:required", "tags.1:maxLength"],
+  ["title:required", "reason:requiredif", "tags.0:required", "tags.1:maxLength", "tags.2:tag"],
 );
+// A project rule shows its own message in the browser, as on the server.
+assert.equal(local[4]?.message, "Use lower case letters, digits and dashes.");
 
 // A handler's own field error arrives the same way.
 try {

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/maulai/tether/internal/msgs"
 )
 
 // runtimeTS is the TypeScript runtime as it lives in the repository: valid
@@ -16,6 +18,23 @@ import (
 //
 //go:embed runtime.ts
 var runtimeTS string
+
+// messageTable is the runtime's message table, in the order the server
+// looks a text up: the built-in texts, then each Pattern's own message,
+// then the project's Messages, which override both.
+func messageTable(patterns map[string]pattern, overrides map[string]string) map[string]string {
+	table := map[string]string{}
+	for k, v := range msgs.Default {
+		table[k] = v
+	}
+	for name, pt := range patterns {
+		table[name] = pt.message
+	}
+	for k, v := range overrides {
+		table[k] = v
+	}
+	return table
+}
 
 // renderRuntime returns runtime.ts for a project: its message table, its
 // patterns translated to JavaScript, and the names of its server-only checks.
