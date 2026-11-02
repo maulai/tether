@@ -26,7 +26,8 @@ export interface Task {
 /** TaskFilter narrows the list of tasks. */
 export interface TaskFilter {
   status?: Status;
-  tag?: string;
+  /** Tags keeps the tasks that have all of these tags. */
+  tags?: string[];
 }
 
 /** TaskInput is what a form sends to create or change a task. */
@@ -44,7 +45,7 @@ export interface TaskInput {
 
 export const taskFilterSchema: Schema<TaskFilter> = schema<TaskFilter>({
   status: { type: "string", enum: statusValues },
-  tag: { type: "string" },
+  tags: { type: "array", elem: { type: "string" }, v: "dive,required" },
 });
 
 export const taskInputSchema: Schema<TaskInput> = schema<TaskInput>({

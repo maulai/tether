@@ -70,6 +70,21 @@ func writeIssues(w http.ResponseWriter, issues []issue) {
 	writeProblem(w, http.StatusUnprocessableEntity, message("invalid", nil), issues)
 }
 
+// WriteError answers err the way a route answers a handler's error: the
+// same problem document, the same status table, after MapErrors. It is for
+// code outside a route that answers a request itself, such as a session
+// check, a CSRF check or panic recovery in middleware, so the client sees
+// one error format. Call it before anything is written to w.
+func WriteError(w http.ResponseWriter, r *http.Request, err error) {
+	if err == nil {
+		// answering a nil error as success could open a gate that meant
+		// to refuse; as a 500 the mistake shows in the log.
+		internal(w, r, http.StatusInternalServerError, errors.New("tether: WriteError called with a nil error"))
+		return
+	}
+	writeError(w, r, mapError(err))
+}
+
 // writeError answers a handler's error. Field errors anywhere in the error
 // tree make it a 422 with all of them. Anything tether cannot classify is
 // a 500 whose cause goes to the log, never to the client: technical details

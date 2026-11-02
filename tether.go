@@ -137,7 +137,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	results := h.fn.Call(args)
 	if errV := results[len(results)-1]; !isNilError(errV) {
-		writeError(w, r, mapError(errV.Interface().(error)))
+		WriteError(w, r, errV.Interface().(error))
 		return
 	}
 	switch {

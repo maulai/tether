@@ -95,6 +95,12 @@ func TestMapErrors(t *testing.T) {
 			t.Errorf("%v: status %d, want %d", c.err, rec.Code, c.status)
 		}
 	}
+	// Middleware answering with WriteError gets the same mapping.
+	direct := httptest.NewRecorder()
+	WriteError(direct, httptest.NewRequest("GET", "/", nil), errNoRows)
+	if direct.Code != 404 {
+		t.Errorf("WriteError: status %d", direct.Code)
+	}
 	// tether's own validation errors do not pass through the mapping.
 	rec := serve(t, "POST /tasks", createTask, httptest.NewRequest("POST", "/tasks", strings.NewReader(`{}`)))
 	if rec.Code != 422 {

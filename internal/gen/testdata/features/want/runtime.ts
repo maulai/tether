@@ -116,9 +116,12 @@ export function url(path: string, query?: object): string {
 function searchParams(query: object): URLSearchParams {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) {
-    for (const v of Array.isArray(value) ? value : [value]) {
-      if (v === undefined || v === null || v === "") continue;
-      params.append(key, String(v));
+    if (Array.isArray(value)) {
+      // Every element is sent, an empty one as an empty value: the server
+      // keeps elements in place, so dropping one would shift the rest.
+      for (const v of value) params.append(key, v === undefined || v === null ? "" : String(v));
+    } else if (value !== undefined && value !== null && value !== "") {
+      params.append(key, String(value));
     }
   }
   return params;

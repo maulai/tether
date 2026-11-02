@@ -216,10 +216,17 @@
             }
           },
           {
+            "description": "Tags keeps the tasks that have all of these tags.",
             "in": "query",
-            "name": "tag",
+            "name": "tags",
             "schema": {
-              "type": "string"
+              "description": "Tags keeps the tasks that have all of these tags.",
+              "items": {
+                "minLength": 1,
+                "pattern": "\\S",
+                "type": "string"
+              },
+              "type": "array"
             }
           }
         ],

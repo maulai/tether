@@ -102,6 +102,23 @@ func init() {
 }
 ```
 
+Middleware answers in the same format with `tether.WriteError`, so the
+client gets the message:
+
+```go
+func requireSession(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !sessions.Valid(r) {
+			tether.WriteError(w, r, tether.Fail(http.StatusUnauthorized, "Please sign in."))
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+```
+
+The example recovers panics the same way.
+
 Files are returned as `tether.File`. A body that can seek, such as an
 `*os.File` or an S3 object, answers `Range` requests (a PDF viewer loading
 page by page, a resumed download) and `If-Modified-Since`:

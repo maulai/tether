@@ -130,9 +130,14 @@ Body rules:
 
 Query rules:
 - Supported field types: strings, named string types, booleans, numbers,
-  `time.Time`, pointers to these, and slices of these (repeated keys).
+  `time.Time`, pointers to these, and slices of these (the key repeated
+  once per element, in order).
 - Unknown keys are rejected (`unknown`). A value that does not parse is a
-  field error (`type`). An empty value means "not given".
+  field error (`type`). An empty single value means "not given".
+- In a slice an empty value is an element: `tags=&tags=b` is `["", "b"]`,
+  so positions hold and the element's rules apply. For a number or a
+  pointer element it is the zero value or nil, as `null` is in JSON. An
+  empty list sends no key and is the same as a missing one.
 - A route whose handler takes no input, and a route that reads its input
   from the body, accept no query parameters at all: a parameter the server
   ignores looks like a filter that worked. A handler without input ignores
@@ -264,6 +269,23 @@ table above applies. Returning the error unchanged keeps the default;
 returning nil means the original error, so a mapping can never turn a
 failure into a success. tether's own decoding and validation errors do not
 pass through it. It is registered once, at start-up; a second call panics.
+
+**Outside routes.** Middleware and plain handlers that answer a request
+themselves, such as a session check, a CSRF check or panic recovery, use
+
+```go
+func WriteError(w http.ResponseWriter, r *http.Request, err error)
+```
+
+It applies `MapErrors` and the table above, so the client sees one error
+format and gets the message, and a 500 is logged, not sent. It keeps the
+headers already set on `w` and must be called before anything is written.
+A nil error is a mistake in the caller and answers 500.
+
+tether does not recover panics in `Route`: `net/http` already does, and one
+recovery middleware around the mux that calls `WriteError` also covers the
+other middleware. It must re-panic `http.ErrAbortHandler`, which aborts a
+response on purpose.
 
 ### 3.6 Enums
 
@@ -568,6 +590,9 @@ export function updateTask(id: string, input: TaskInput, options?: RequestOption
 - The input parameter is optional if the input type has no required field.
 - Route functions send only the fields of the input type (`strip`), so a
   form may hold fields of its own.
+- In the query string a field that is `undefined`, `null` or `""` is left
+  out. A list sends every element, `null` and `undefined` as empty values,
+  so the server sees each element at its position (3.3).
 - A handler without output returns `Promise<void>`.
 - `tether.File` output returns `Promise<Blob>`; a `GET` route with file
   output also gets `<name>Url(...)`, returning the address for links.

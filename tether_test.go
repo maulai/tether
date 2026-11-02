@@ -147,6 +147,12 @@ func TestQuery(t *testing.T) {
 	if p := decodeProblem(t, rec); p.Errors[0].Rule != "oneof" {
 		t.Errorf("errors %+v", p.Errors)
 	}
+	// An empty element keeps its place, so positions stay meaningful.
+	tags := func(r *http.Request, f taskFilter) ([]string, error) { return f.Tag, nil }
+	rec = serve(t, "GET /tasks", tags, httptest.NewRequest("GET", "/tasks?tag=&tag=b", nil))
+	if rec.Body.String() != `["","b"]`+"\n" {
+		t.Errorf("tags %s", rec.Body)
+	}
 }
 
 func TestNoInputRejectsQuery(t *testing.T) {
@@ -199,6 +205,34 @@ func TestHandlerErrors(t *testing.T) {
 		p := decodeProblem(t, rec)
 		if rec.Code != c.status || p.Detail != c.detail || len(p.Errors) != c.issues {
 			t.Errorf("%v: status %d, problem %+v", c.err, rec.Code, p)
+		}
+	}
+}
+
+// Middleware answers in the format of a route, keeping the headers it set.
+func TestWriteError(t *testing.T) {
+	gate := func(err error) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("WWW-Authenticate", "Session")
+			WriteError(w, r, err)
+		})
+	}
+	cases := []struct {
+		err    error
+		status int
+		detail string
+	}{
+		{Fail(http.StatusUnauthorized, "Please sign in."), 401, "Please sign in."},
+		{FieldError("token", "Expired."), 422, "Please check the marked fields."},
+		{errors.New("session store down"), 500, "Something went wrong."},
+		{nil, 500, "Something went wrong."},
+	}
+	for _, c := range cases {
+		rec := httptest.NewRecorder()
+		gate(c.err).ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+		p := decodeProblem(t, rec)
+		if rec.Code != c.status || p.Detail != c.detail || rec.Header().Get("WWW-Authenticate") != "Session" {
+			t.Errorf("%v: status %d, problem %+v, headers %v", c.err, rec.Code, p, rec.Header())
 		}
 	}
 }

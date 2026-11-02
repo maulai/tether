@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -45,5 +46,16 @@ func TestClient(t *testing.T) {
 	t.Logf("%s", out)
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestRecoverPanics shows a panic answered like any other unexpected error,
+// in the format the client reads.
+func TestRecoverPanics(t *testing.T) {
+	h := recoverPanics(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { panic("boom") }))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+	if rec.Code != 500 || rec.Header().Get("Content-Type") != "application/problem+json" || strings.Contains(rec.Body.String(), "boom") {
+		t.Errorf("status %d, headers %v, body %s", rec.Code, rec.Header(), rec.Body)
 	}
 }

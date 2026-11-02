@@ -7,9 +7,11 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -49,7 +51,8 @@ type Task struct {
 // TaskFilter narrows the list of tasks.
 type TaskFilter struct {
 	Status Status `json:"status"`
-	Tag    string `json:"tag"`
+	// Tags keeps the tasks that have all of these tags.
+	Tags []string `json:"tags" v:"dive,required"`
 }
 
 var (
@@ -64,7 +67,7 @@ func ListTasks(r *http.Request, f TaskFilter) ([]Task, error) {
 	defer mu.Unlock()
 	var out []Task
 	for _, t := range tasks {
-		if (f.Status == "" || t.Status == f.Status) && (f.Tag == "" || slices.Contains(t.Tags, f.Tag)) {
+		if (f.Status == "" || t.Status == f.Status) && hasAll(t.Tags, f.Tags) {
 			out = append(out, t)
 		}
 	}
@@ -168,7 +171,26 @@ func routes() http.Handler {
 	mux.Handle(tether.Route("DELETE /v1/tasks/{id}", DeleteTask))
 	mux.Handle(tether.Route("GET /v1/tasks.csv", ExportTasks))
 	mux.Handle(tether.Route("POST /v1/tasks/import", ImportTasks))
-	return requestID(mux)
+	// requestID goes outside, so a response to a panic carries the id too.
+	return requestID(recoverPanics(mux))
+}
+
+// recoverPanics answers a panic like any other unexpected error: a 500
+// problem document for the client, the cause and stack in the log.
+func recoverPanics(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			p := recover()
+			if p == nil {
+				return
+			}
+			if p == http.ErrAbortHandler {
+				panic(p) // net/http's way to abort a response on purpose
+			}
+			tether.WriteError(w, r, fmt.Errorf("panic: %v\n%s", p, debug.Stack()))
+		}()
+		next.ServeHTTP(w, r)
+	})
 }
 
 // requestID marks every response, so an error page can name the request.
@@ -204,6 +226,15 @@ func find(r *http.Request) (Task, error) {
 		return Task{}, errNotFound
 	}
 	return t, nil
+}
+
+func hasAll(have, want []string) bool {
+	for _, tag := range want {
+		if !slices.Contains(have, tag) {
+			return false
+		}
+	}
+	return true
 }
 
 func taken(title, except string) bool {

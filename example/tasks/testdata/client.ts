@@ -1,7 +1,7 @@
 // Drives the example server through the generated client: node client.ts <server url>
 import assert from "node:assert/strict";
 import { configure, ValidationError, ApiError } from "./runtime.ts";
-import { createTask, getTask, listTasks, updateTask, deleteTask, exportTasks, importTasks, taskInputSchema } from "./index.ts";
+import { createTask, getTask, listTasks, updateTask, deleteTask, exportTasks, importTasks, taskInputSchema, taskFilterSchema } from "./index.ts";
 
 configure({ baseUrl: process.argv[2] ?? "" });
 
@@ -36,6 +36,19 @@ try {
 assert.equal((await getTask(task.id)).id, task.id);
 assert.equal((await listTasks({ status: "open" })).length, 1);
 assert.equal((await listTasks({ status: "done" })).length, 0);
+assert.equal((await listTasks({ tags: ["docs"] })).length, 1);
+
+// A list in the query string keeps its empty elements, so the server
+// reports them at the same position as the browser.
+const filter = { tags: ["", "docs"] };
+try {
+  await listTasks(filter);
+  assert.fail("expected a validation error");
+} catch (e) {
+  assert.ok(e instanceof ValidationError);
+  assert.deepEqual(e.errors, taskFilterSchema.validate(filter));
+  assert.equal(e.errors[0]?.field, "tags.0");
+}
 const done = await updateTask(task.id, { title: "Write the README", status: "done" });
 assert.equal(done.status, "done");
 assert.match(await (await exportTasks()).text(), /Write the README/);
