@@ -11,6 +11,7 @@ var Messages = map[string]string{
 	"type":        "Ungültiger Wert.",
 	"integer":     "Bitte eine ganze Zahl eingeben.",
 	"unknown":     "Unbekanntes Feld.",
+	"missing":     "Fehlt. Bei PUT gehört jedes Feld dazu; null oder ein leerer Wert leert es.",
 	"text":        "Enthält unsichtbare Steuerzeichen.",
 	"minLength":   "Mindestens {min} Zeichen.",
 	"maxLength":   "Höchstens {max} Zeichen.",

@@ -25,28 +25,37 @@ var errMalformed = errors.New("malformed")
 // path of the value ("items.2.sku"), all problems are reported at once, and
 // an empty string can mean "not given" for numbers and times, which is what
 // forms send for an empty input.
-func decodeBody(data []byte, v reflect.Value, sp *structPlan) ([]issue, error) {
-	if len(bytes.TrimSpace(data)) == 0 {
-		return nil, nil
+//
+// whole is set for PUT, which replaces the whole record: every field of
+// every object must then be sent, so a field the caller forgot is an error
+// instead of a value silently cleared.
+func decodeBody(data []byte, v reflect.Value, sp *structPlan, whole bool) ([]Issue, error) {
+	var doc any = map[string]any{}
+	if len(bytes.TrimSpace(data)) > 0 {
+		dec := json.NewDecoder(bytes.NewReader(data))
+		dec.UseNumber()
+		if err := dec.Decode(&doc); err != nil {
+			return nil, errMalformed
+		}
+		if _, err := dec.Token(); err != io.EOF {
+			return nil, errMalformed
+		}
 	}
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.UseNumber()
-	var doc any
-	if err := dec.Decode(&doc); err != nil {
-		return nil, errMalformed
+	if doc == nil && whole {
+		doc = map[string]any{} // a null body sends no field either
 	}
-	if _, err := dec.Token(); err != io.EOF {
-		return nil, errMalformed
-	}
-	var d decoder
+	d := decoder{whole: whole}
 	d.value("", doc, v, &valuePlan{typ: v.Type(), kind: vtag.Struct, fields: sp}, false)
 	return d.issues, nil
 }
 
-type decoder struct{ issues []issue }
+type decoder struct {
+	issues []Issue
+	whole  bool
+}
 
 func (d *decoder) fail(path, code string) {
-	d.issues = append(d.issues, issue{Field: path, Rule: code, Message: message(code, nil)})
+	d.issues = append(d.issues, Issue{Field: path, Rule: code, Message: message(code, nil)})
 }
 
 func join(path, key string) string {
@@ -193,20 +202,42 @@ func (d *decoder) value(path string, raw any, v reflect.Value, vp *valuePlan, as
 			d.fail(path, "type")
 			return
 		}
-		for _, k := range sortedKeys(obj) {
+		keys := sortedKeys(obj)
+		if d.whole {
+			keys = withMissing(keys, obj, vp.fields)
+		}
+		for _, k := range keys {
 			fp, ok := vp.fields.byName[k]
 			if !ok {
 				d.fail(join(path, k), "unknown")
 				continue
 			}
+			raw, sent := obj[k]
+			if !sent {
+				d.fail(join(path, k), "missing")
+				continue
+			}
 			fv, _ := fieldByIndex(v, fp.index, true)
-			d.value(join(path, k), obj[k], fv, fp.plan, fp.asString)
+			d.value(join(path, k), raw, fv, fp.plan, fp.asString)
 		}
 	case vtag.Any:
 		v.Set(reflect.ValueOf(plain(raw)))
 	default:
 		d.fail(path, "type")
 	}
+}
+
+// withMissing adds to the sorted keys of obj the fields it lacks, so they are
+// reported in order with the rest. A field with omitempty or omitzero may be
+// left out; null counts as sent.
+func withMissing(keys []string, obj map[string]any, sp *structPlan) []string {
+	for _, fp := range sp.fields {
+		if _, ok := obj[fp.name]; !ok && !fp.omitEmpty {
+			keys = append(keys, fp.name)
+		}
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // setNumber parses s into the number v and returns a message code on
@@ -284,7 +315,7 @@ func sortedKeys(m map[string]any) []string {
 
 // decodeQuery fills v from the query string. Every key must name a field;
 // a field that is not a slice takes one value.
-func decodeQuery(q url.Values, v reflect.Value, sp *structPlan) []issue {
+func decodeQuery(q url.Values, v reflect.Value, sp *structPlan) []Issue {
 	var d decoder
 	keys := make([]string, 0, len(q))
 	for k := range q {

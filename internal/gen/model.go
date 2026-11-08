@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/maulai/tether/internal/vtag"
 )
@@ -51,6 +53,11 @@ type structDef struct {
 	doc    string
 	in     bool // reached from a handler's input
 	out    bool // reached from a handler's output
+	// whole: reached from the input of a PUT route, which must send every
+	// field; validated: reached from a tether.Validate call. A struct only
+	// validated is no part of the API and is not written out.
+	whole     bool
+	validated bool
 }
 
 type fieldDef struct {
@@ -101,6 +108,7 @@ func (e *enumDef) listed() []string {
 
 type model struct {
 	*program
+	qualify bool      // TypeScript and OpenAPI names start with the package
 	pos     token.Pos // where the type being mapped is used, for errors
 	defs    map[*types.TypeName]*structDef
 	enums   map[*types.TypeName]*enumDef
@@ -110,22 +118,26 @@ type model struct {
 	jsonM   *types.Interface
 	inTypes map[*route]*tsType
 	outType map[*route]*tsType
+	// validates holds, per package, the types it passes to tether.Validate.
+	validates map[*types.Package][]*tsType
 	// registers lists, per handler package, the enums its handlers' inputs
 	// use; tether_gen.go in that package registers them.
 	registers map[*types.Package][]*enumDef
 }
 
-func newModel(p *program) *model {
+func newModel(p *program, qualify bool) *model {
 	m := &model{
-		program: p,
-		defs:    map[*types.TypeName]*structDef{},
-		enums:   map[*types.TypeName]*enumDef{},
-		noEnum:  map[*types.TypeName]bool{},
-		names:   map[string]token.Pos{},
-		textM:   method("MarshalText"),
-		jsonM:   method("MarshalJSON"),
-		inTypes: map[*route]*tsType{},
-		outType: map[*route]*tsType{},
+		program:   p,
+		qualify:   qualify,
+		validates: map[*types.Package][]*tsType{},
+		defs:      map[*types.TypeName]*structDef{},
+		enums:     map[*types.TypeName]*enumDef{},
+		noEnum:    map[*types.TypeName]bool{},
+		names:     map[string]token.Pos{},
+		textM:     method("MarshalText"),
+		jsonM:     method("MarshalJSON"),
+		inTypes:   map[*route]*tsType{},
+		outType:   map[*route]*tsType{},
 	}
 	for _, r := range p.routes {
 		where := r.handler.Name()
@@ -134,12 +146,25 @@ func newModel(p *program) *model {
 			t := m.typ(r.in, where)
 			m.inTypes[r] = t
 			m.mark(t, true, map[*structDef]bool{})
+			if r.method == "PUT" {
+				walkDefs(t, func(d *structDef) { d.whole = true }, map[*structDef]bool{})
+			}
 		}
 		if r.out != nil && !r.file {
 			t := m.typ(r.out, where)
 			m.outType[r] = t
 			m.mark(t, false, map[*structDef]bool{})
 		}
+	}
+	for _, v := range p.validates {
+		m.pos = v.pos
+		t := m.typ(v.typ, "tether.Validate").base()
+		if t.kind != kRef || len(t.def.params) > 0 {
+			m.errorf(v.pos, "tether.Validate needs a value of a named, non-generic struct type here, so tether can register the enums it uses")
+			continue
+		}
+		m.validates[v.pkg] = append(m.validates[v.pkg], t)
+		walkDefs(t, func(d *structDef) { d.validated = true }, map[*structDef]bool{})
 	}
 	m.checkInputs()
 	m.checkNames()
@@ -149,7 +174,8 @@ func newModel(p *program) *model {
 
 // planRegistrations decides where enums are registered: in the package of
 // the handler that takes them. Route refers to the handler, so Go links that
-// package, and runs its init, wherever the route is built, in tests too.
+// package, and runs its init, wherever the route is built, in tests too. The
+// same holds for a package that calls tether.Validate on a type.
 // Enum packages are never written to, so a domain package does not depend on
 // tether and an enum may live in another module or in generated code. No
 // import cycle can arise: the handler package already imports the enum's
@@ -169,6 +195,14 @@ func (m *model) planRegistrations() {
 			where[pkg] = r.handler.Pos()
 		}
 		collectEnums(t, need[pkg], map[*structDef]bool{})
+	}
+	for pkg, list := range m.validates {
+		if need[pkg] == nil {
+			need[pkg] = map[*enumDef]bool{}
+		}
+		for _, t := range list {
+			collectEnums(t, need[pkg], map[*structDef]bool{})
+		}
 	}
 	for pkg, set := range need {
 		if len(set) == 0 {
@@ -191,6 +225,24 @@ func (m *model) planRegistrations() {
 		}
 		sort.Slice(list, func(i, j int) bool { return qualified(list[i].obj) < qualified(list[j].obj) })
 		m.registers[pkg] = list
+	}
+}
+
+// walkDefs calls fn for every struct reachable from t.
+func walkDefs(t *tsType, fn func(*structDef), seen map[*structDef]bool) {
+	if t == nil {
+		return
+	}
+	walkDefs(t.elem, fn, seen)
+	for _, a := range t.args {
+		walkDefs(a, fn, seen)
+	}
+	if t.def != nil && !seen[t.def] {
+		seen[t.def] = true
+		fn(t.def)
+		for _, f := range t.def.fields {
+			walkDefs(f.typ, fn, seen)
+		}
 	}
 }
 
@@ -337,7 +389,7 @@ func (m *model) structDef(obj *types.Named, at string) *structDef {
 	if d, ok := m.defs[tn]; ok {
 		return d
 	}
-	d := &structDef{name: tn.Name(), obj: tn, doc: m.typeDocs[tn]}
+	d := &structDef{name: m.typeName(tn), obj: tn, doc: m.typeDocs[tn]}
 	m.defs[tn] = d // before the fields, for recursive types
 	for tp := range obj.TypeParams().TypeParams() {
 		d.params = append(d.params, tp.Obj().Name())
@@ -503,7 +555,7 @@ func (m *model) enumFor(named *types.Named) *enumDef {
 		return nil
 	}
 	sort.Slice(consts, func(i, j int) bool { return consts[i].Pos() < consts[j].Pos() })
-	e := &enumDef{name: tn.Name(), obj: tn, consts: consts, doc: m.typeDocs[tn]}
+	e := &enumDef{name: m.typeName(tn), obj: tn, consts: consts, doc: m.typeDocs[tn]}
 	for _, c := range consts {
 		e.values = append(e.values, constant.StringVal(c.Val()))
 	}
@@ -541,8 +593,15 @@ func (m *model) mark(t *tsType, in bool, seen map[*structDef]bool) {
 
 // checkInputs applies the same checks to input types that tether.Route
 // applies at start-up, so a mistake fails the generator, not the server.
+// Types passed to tether.Validate get them too.
 func (m *model) checkInputs() {
-	defs := m.sortedDefs()
+	var defs []*structDef
+	for _, d := range m.defs {
+		if d.in || d.validated {
+			defs = append(defs, d)
+		}
+	}
+	sort.Slice(defs, func(i, j int) bool { return qualified(defs[i].obj) < qualified(defs[j].obj) })
 	for _, r := range m.routes {
 		if t := m.inTypes[r]; t != nil {
 			if t.kind != kRef {
@@ -559,9 +618,6 @@ func (m *model) checkInputs() {
 		}
 	}
 	for _, d := range defs {
-		if !d.in {
-			continue
-		}
 		if len(d.params) > 0 {
 			m.errorf(d.obj.Pos(), "%s: input types must not be generic", d.name)
 			continue
@@ -689,10 +745,14 @@ func queryable(t *tsType) bool {
 	return scalar(b)
 }
 
+// sortedDefs lists the structs of the API, the ones handlers take or
+// return.
 func (m *model) sortedDefs() []*structDef {
 	var out []*structDef
 	for _, d := range m.defs {
-		out = append(out, d)
+		if d.in || d.out {
+			out = append(out, d)
+		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].name < out[j].name })
 	return out
@@ -713,32 +773,38 @@ func (m *model) sortedEnums() []*enumDef {
 // usable: two Go types or handlers with the same name would collide.
 func (m *model) checkNames() {
 	seen := map[string]string{}
-	claim := func(name, what string, pos token.Pos) {
+	typeNames := map[string]bool{} // names taken by a type
+	claim := func(name, what string, pos token.Pos, isType bool) {
 		if reserved[name] {
 			m.errorf(pos, "%s: %q is a reserved word in TypeScript; rename it", what, name)
 			return
 		}
 		if prev, ok := seen[name]; ok {
-			m.errorf(pos, "%s and %s both become %q in TypeScript; rename one", prev, what, name)
+			hint := ""
+			if isType && typeNames[name] && !m.qualify {
+				hint = ", or run tether with -qualify to prefix type names with their package"
+			}
+			m.errorf(pos, "%s and %s both become %q in TypeScript; rename one%s", prev, what, name, hint)
 			return
 		}
 		seen[name] = what
+		typeNames[name] = isType
 	}
 	for _, d := range m.sortedDefs() {
-		claim(d.name, qualified(d.obj), d.obj.Pos())
+		claim(d.name, qualified(d.obj), d.obj.Pos(), true)
 		if d.in && len(d.params) == 0 {
-			claim(schemaName(d), qualified(d.obj)+" (validator)", d.obj.Pos())
+			claim(schemaName(d), qualified(d.obj)+" (validator)", d.obj.Pos(), false)
 		}
 	}
 	for _, e := range m.sortedEnums() {
-		claim(e.name, qualified(e.obj), e.obj.Pos())
-		claim(valuesName(e), qualified(e.obj)+" (values)", e.obj.Pos())
+		claim(e.name, qualified(e.obj), e.obj.Pos(), true)
+		claim(valuesName(e), qualified(e.obj)+" (values)", e.obj.Pos(), false)
 	}
 	for _, r := range m.routes {
 		what := fmt.Sprintf("handler %s", qualifiedFunc(r.handler))
-		claim(r.name, what, r.handler.Pos())
+		claim(r.name, what, r.handler.Pos(), false)
 		if r.file && r.method == "GET" {
-			claim(r.name+"Url", what+" (address)", r.handler.Pos())
+			claim(r.name+"Url", what+" (address)", r.handler.Pos(), false)
 		}
 		for _, pp := range r.params {
 			if !isIdent(pp.name) || reserved[pp.name] || pp.name == "input" || pp.name == "options" || pp.name == "file" {
@@ -754,6 +820,26 @@ func (m *model) checkNames() {
 		}
 		patterns[key] = true
 	}
+}
+
+// typeName is the TypeScript and OpenAPI name of a named Go type. With
+// -qualify it starts with the package name, so document.Status and
+// stock.Status can both be part of the API. A name that already starts with
+// the package name as a word keeps it once: media.MediaFile is MediaFile,
+// while tax.Taxonomy becomes TaxTaxonomy.
+func (m *model) typeName(tn *types.TypeName) string {
+	name := tn.Name()
+	if !m.qualify || tn.Pkg() == nil {
+		return name
+	}
+	pkg := tn.Pkg().Name()
+	if len(name) >= len(pkg) && strings.EqualFold(name[:len(pkg)], pkg) {
+		if r, _ := utf8.DecodeRuneInString(name[len(pkg):]); r == utf8.RuneError || unicode.IsUpper(r) {
+			return name
+		}
+	}
+	r, size := utf8.DecodeRuneInString(pkg)
+	return string(unicode.ToUpper(r)) + pkg[size:] + name
 }
 
 func qualified(tn *types.TypeName) string {

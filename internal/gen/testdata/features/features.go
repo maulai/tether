@@ -91,6 +91,41 @@ type Filter struct {
 	Page  int       `json:"page" v:"min=1"`
 }
 
+// Settings are replaced as a whole with PUT, so every field must be sent,
+// in TypeScript and to the server.
+type Settings struct {
+	Name   string            `json:"name" v:"required"`
+	Notes  string            `json:"notes"`
+	Hours  []Opening         `json:"hours"`
+	Labels map[string]string `json:"labels"`
+	// Logo may be left out, and then stays as it is.
+	Logo string `json:"logo,omitzero"`
+}
+
+// Opening is one opening time. Inside a PUT input it is complete too.
+type Opening struct {
+	Day   string `json:"day" v:"required"`
+	Hours string `json:"hours"`
+}
+
+// Reason says why stock changed.
+type Reason string
+
+const (
+	ReasonSale   Reason = "sale"
+	ReasonReturn Reason = "return"
+)
+
+// Adjustment never passes a route. Book checks it with tether.Validate, so
+// its enum is registered all the same, and it stays out of the API.
+type Adjustment struct {
+	Reason Reason `json:"reason" v:"required"`
+	Qty    int    `json:"qty" v:"min=1"`
+}
+
+// Book records an adjustment that does not arrive over HTTP.
+func Book(a Adjustment) error { return tether.Validate(a) }
+
 type store struct{}
 
 // List returns a page of items.
@@ -111,6 +146,9 @@ func ServeAsset(r *http.Request) (tether.File, error) { return tether.File{}, ni
 // Archive archives an item.
 func Archive(r *http.Request) error { return nil }
 
+// ReplaceSettings replaces the shop's settings.
+func ReplaceSettings(r *http.Request, in Settings) (Settings, error) { return in, nil }
+
 // Routes registers the API.
 func Routes(mux *http.ServeMux) {
 	s := &store{}
@@ -120,4 +158,5 @@ func Routes(mux *http.ServeMux) {
 	mux.Handle(tether.Route("GET /api/items/{id}/sheet", Sheet))
 	mux.Handle(tether.Route("GET /assets/{path...}", ServeAsset))
 	mux.Handle(tether.Route("PATCH /api/items/{id}/archive", Archive))
+	mux.Handle(tether.Route("PUT /api/settings", ReplaceSettings))
 }

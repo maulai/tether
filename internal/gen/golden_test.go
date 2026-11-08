@@ -51,6 +51,35 @@ func TestGoldenFeatures(t *testing.T) {
 	})
 }
 
+// TestGoldenQualify runs over packages that share type names, with -qualify.
+func TestGoldenQualify(t *testing.T) {
+	golden(t, Options{
+		Dir:      root(t),
+		Patterns: []string{"./internal/gen/testdata/qualify/..."},
+		Out:      "internal/gen/testdata/qualify/want",
+		OpenAPI:  "internal/gen/testdata/qualify/want/openapi.json",
+		Title:    "Qualify",
+		Version:  "1.0.0",
+		Tool:     "v9.9.9",
+		Qualify:  true,
+	})
+}
+
+// TestQualifyNeeded checks that a collision between types of two packages
+// points to -qualify, and that -qualify cannot separate two packages of the
+// same name.
+func TestQualifyNeeded(t *testing.T) {
+	dir := root(t)
+	_, err := Generate(Options{Dir: dir, Patterns: []string{"./internal/gen/testdata/qualify/..."}, Out: "unused"})
+	if err == nil || !strings.Contains(err.Error(), `both become "Status" in TypeScript; rename one, or run tether with -qualify`) {
+		t.Errorf("without -qualify: %v", err)
+	}
+	_, err = Generate(Options{Dir: dir, Patterns: []string{"./internal/gen/testdata/clash"}, Out: "unused", Qualify: true})
+	if err == nil || !strings.Contains(err.Error(), `both become "TaxRate" in TypeScript; rename one`) || strings.Contains(err.Error(), "-qualify") {
+		t.Errorf("two packages named tax: %v", err)
+	}
+}
+
 // TestGoldenExample keeps the example's generated files in step with the
 // generator, with the options of its go:generate line.
 func TestGoldenExample(t *testing.T) {
@@ -124,6 +153,7 @@ func TestTypeScriptCompiles(t *testing.T) {
 	dir := root(t)
 	files := []string{
 		filepath.Join(dir, "internal/gen/testdata/features/want/index.ts"),
+		filepath.Join(dir, "internal/gen/testdata/qualify/want/index.ts"),
 		filepath.Join(dir, "example/tasks/web/src/api/index.ts"),
 	}
 	config := `{

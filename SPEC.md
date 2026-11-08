@@ -120,6 +120,14 @@ Body rules:
   sent to an integer field). All such problems are reported at once, each
   with its exact path; validation runs only when there are none.
 - `null` leaves the zero value, as with `encoding/json`.
+- `PUT` replaces the whole record, so its body must send every field, in
+  nested structs and in structs inside lists and maps too. A field it
+  lacks is a field error (`missing`) at its path, `links` or
+  `items.2.note`, instead of a value cleared without notice. `null` counts
+  as sent. A field with `omitempty` or `omitzero` may be left out, for a
+  value the handler keeps when it is not sent; the entries of a map are
+  data, not fields, and are not required. `POST` and `PATCH` take what they
+  get.
 - For a number or a `time.Time`, `""` means "not given": forms send it for
   an empty input.
 - A `time.Time` accepts RFC 3339 and a plain date (`2026-11-01`, midnight
@@ -450,6 +458,28 @@ and must not be empty; `Messages` can override it like any other. The
 generator copies a `Pattern`'s text into the TypeScript runtime (5); a
 `Check`'s text stays on the server, the only side that reports it.
 
+### 4.3 Outside routes
+
+```go
+func Validate(v any) error     // v is a struct or a pointer to one
+func Issues(err error) []Issue // Issue{Field, Rule, Message}
+```
+
+`Validate` checks a value with the rules of its tags and its enums, exactly
+as a route checks its input after reading it: for input that does not
+arrive over HTTP, and for tests of the rules without a route. It returns
+nil, or the field errors joined into one error, which a handler can return
+as it is to answer 422. `missing` does not apply, since a Go value has no
+missing fields.
+
+`Issues` lists the field errors in an error as a 422 response would: those
+of `Validate`, of `FieldError` and of `errors.Join` over them.
+
+The generator registers the enums of every type passed to `Validate`, in
+the package that calls it, so the argument must have a named struct type
+there; `Validate(v)` with `v any` is reported. Like `Route`, `Validate`
+panics for a value that is not a struct and for a mistake in a tag.
+
 ## 5. Messages
 
 Every error carries a finished text. The text for a rule comes from a
@@ -486,6 +516,7 @@ func init() {
 | `type` | Invalid value. |
 | `integer` | Must be a whole number. |
 | `unknown` | Unknown field. |
+| `missing` | Missing. A PUT sends every field; null or an empty value clears it. |
 | `text` | Contains invisible control characters. |
 | `minLength` | Must be at least {min} characters. |
 | `maxLength` | Must be at most {max} characters. |
@@ -510,18 +541,21 @@ func init() {
 ## 6. Generator
 
 ```
-go tool tether -out <dir> [-openapi <file>] [-title <text>] [-version <text>] [-check] [packages]
+go tool tether -out <dir> [-openapi <file>] [-title <text>] [-version <text>] [-qualify] [-check] [packages]
 ```
 
 - `packages` defaults to `./...`, relative to the directory it runs in
   (for `go generate`, the directory of the file with the directive).
 - `-out`: directory for the TypeScript files.
 - `-openapi`: path of the OpenAPI document, default `openapi.json`.
+- `-qualify`: start every type name in TypeScript and OpenAPI with its
+  package name (6.1), for programs that use one name in several packages.
 - `-check`: write nothing; exit with status 1 and list every file that is
   missing or differs. For CI.
 
 It finds every call to `tether.Route` in the loaded packages and follows
-the types of every input and output.
+the types of every input and output. It also reads every `tether.Validate`
+call (4.3), to check the type and register its enums.
 
 ### 6.1 Types
 
@@ -548,12 +582,28 @@ embedded structs without a name are flattened, unexported fields are
 skipped. A field with `omitempty` or `omitzero` is optional (`?`) in output
 types. In input types, a field is optional unless it has `required`. A
 struct reached from both an input and an output follows the input rule.
+A struct reached from the input of a `PUT` route must be sent whole (3.3),
+so all its fields are required, as in output types; this holds for every
+route that uses it, a `POST` too, and the compiler then finds a forgotten
+field before the server does.
+
+**Names.** A type keeps its Go name: `Task`, `Page<Task>`. With `-qualify`
+it starts with its package name in UpperCamel, everywhere: `tax.Class` is
+`TaxClass` with `taxClassValues`, `tax.VatRateInput` has
+`taxVatRateInputSchema`, `httpx.Page[tax.VatRate]` is
+`HttpxPage<TaxVatRate>` and the component `HttpxPage_TaxVatRate`. A name
+that already starts with the package name as a word keeps it once:
+`media.MediaFile` is `MediaFile`, `document.Document` is `Document`, while
+`tax.Taxonomy` becomes `TaxTaxonomy`. Route functions, field names, error
+paths and `tether_gen.go` do not change.
 
 Errors when generating:
 - a type implementing `json.Marshaler` but not `encoding.TextMarshaler`
   (its JSON shape is unknown; use a plain type in the API),
 - channels, functions, complex numbers, maps with other key types,
-- two types with the same name in different packages (rename one).
+- two types with the same name in different packages (rename one, or use
+  `-qualify`); with `-qualify`, two packages of the same name that both
+  contribute such a type.
 
 Doc comments on types and fields become descriptions in OpenAPI and in
 TypeScript. An `example:"…"` tag becomes the example in OpenAPI.
@@ -592,6 +642,8 @@ export function updateTask(id: string, input: TaskInput, options?: RequestOption
 ```
 
 - The input parameter is optional if the input type has no required field.
+  The input type of a `PUT` route has every field required (6.1), so the
+  compiler reports a field the call forgets.
 - Route functions send only the fields of the input type (`strip`), so a
   form may hold fields of its own.
 - In the query string a field that is `undefined`, `null` or `""` is left
@@ -646,7 +698,8 @@ offers:
 The validator checks shape first (`type`, `integer`) and rules only when the
 shape holds, like the server. Unlike the server it ignores unknown fields,
 since route functions never send them. Project checks registered with
-`Check` pass in the browser; the server reports them.
+`Check` pass in the browser; the server reports them. The same holds for
+`missing`, which the types already prevent.
 
 The generated code compiles under the strictest TypeScript settings
 (`strict`, `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`,
@@ -661,9 +714,10 @@ Validators do not change values. Dates are ISO strings in both directions.
   expectation). The Go validator and the TypeScript runtime run the same
   vectors; the TypeScript side runs with Node.js and adds no dependency to
   the repository.
-- **Golden files:** the generator runs over `internal/gen/testdata/features`
-  and the example and compares OpenAPI, TypeScript and `tether_gen.go` byte
-  for byte; `internal/gen/testdata/mistakes` pins the error report.
+- **Golden files:** the generator runs over `internal/gen/testdata/features`,
+  over `internal/gen/testdata/qualify` with `-qualify`, and over the example,
+  and compares OpenAPI, TypeScript and `tether_gen.go` byte for byte;
+  `internal/gen/testdata/mistakes` pins the error report.
   `go test ./internal/gen -update` rewrites them.
 - **End to end:** the example's test serves its API and drives it with the
   generated client in Node.js, asserting that browser and server report the

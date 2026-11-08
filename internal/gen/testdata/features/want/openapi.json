@@ -258,6 +258,25 @@
         ],
         "type": "object"
       },
+      "Opening": {
+        "additionalProperties": false,
+        "description": "Opening is one opening time. Inside a PUT input it is complete too.",
+        "properties": {
+          "day": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "hours": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "day",
+          "hours"
+        ],
+        "type": "object"
+      },
       "Page_Item": {
         "description": "Page is one page of a list.",
         "properties": {
@@ -304,6 +323,43 @@
           "type",
           "title",
           "status"
+        ],
+        "type": "object"
+      },
+      "Settings": {
+        "additionalProperties": false,
+        "description": "Settings are replaced as a whole with PUT, so every field must be sent,\nin TypeScript and to the server.",
+        "properties": {
+          "hours": {
+            "items": {
+              "$ref": "#/components/schemas/Opening"
+            },
+            "type": "array"
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "logo": {
+            "description": "Logo may be left out, and then stays as it is.",
+            "type": "string"
+          },
+          "name": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "notes",
+          "hours",
+          "labels"
         ],
         "type": "object"
       }
@@ -549,6 +605,43 @@
           }
         },
         "summary": "Sheet renders the data sheet of an item as PDF."
+      }
+    },
+    "/api/settings": {
+      "put": {
+        "operationId": "replaceSettings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Settings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Settings"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "422": {
+            "$ref": "#/components/responses/Invalid"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "summary": "ReplaceSettings replaces the shop's settings."
       }
     },
     "/assets/{path}": {

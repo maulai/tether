@@ -10,6 +10,7 @@ import (
 
 func init() {
 	tether.RegisterEnum(KindNone, KindProduct, KindService)
+	tether.RegisterEnum(ReasonSale, ReasonReturn)
 	tether.RegisterEnum(catalog.ColorRed, catalog.ColorBlue)
 	tether.RegisterEnum(catalog2.GradeA, catalog2.GradeB)
 }

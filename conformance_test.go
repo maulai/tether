@@ -88,7 +88,7 @@ func TestConformance(t *testing.T) {
 				t.Fatal(err)
 			}
 			in := reflect.New(typ).Elem()
-			issues, err := decodeBody(c.Input, in, plan)
+			issues, err := decodeBody(c.Input, in, plan, false)
 			if err != nil {
 				t.Fatal(err)
 			}

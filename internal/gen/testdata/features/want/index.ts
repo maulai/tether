@@ -67,10 +67,29 @@ export interface Line {
   child?: Line | null;
 }
 
+/** Opening is one opening time. Inside a PUT input it is complete too. */
+export interface Opening {
+  day: string;
+  hours: string;
+}
+
 /** Page is one page of a list. */
 export interface Page<T> {
   items: T[];
   total: number;
+}
+
+/**
+ * Settings are replaced as a whole with PUT, so every field must be sent,
+ * in TypeScript and to the server.
+ */
+export interface Settings {
+  name: string;
+  notes: string;
+  hours: Opening[];
+  labels: Record<string, string>;
+  /** Logo may be left out, and then stays as it is. */
+  logo?: string;
 }
 
 // ── Validators ────────────────────────────────────────────────────────────
@@ -105,6 +124,19 @@ export const lineSchema: Schema<Line> = schema<Line>({
   text: { type: "string", v: "required,max=200" },
   qty: { type: "number", int: "int", v: "min=1" },
   child: { type: "object", schema: () => lineSchema, nullable: true },
+});
+
+export const openingSchema: Schema<Opening> = schema<Opening>({
+  day: { type: "string", v: "required" },
+  hours: { type: "string" },
+});
+
+export const settingsSchema: Schema<Settings> = schema<Settings>({
+  name: { type: "string", v: "required" },
+  notes: { type: "string" },
+  hours: { type: "array", elem: { type: "object", schema: () => openingSchema } },
+  labels: { type: "record", elem: { type: "string" } },
+  logo: { type: "string" },
 });
 
 // ── Routes ────────────────────────────────────────────────────────────────
@@ -157,6 +189,15 @@ export function sheet(id: string, options?: RequestOptions): Promise<Blob> {
 /** The address of sheet, for links. */
 export function sheetUrl(id: string): string {
   return url(`/api/items/${encodeURIComponent(id)}/sheet`);
+}
+
+/**
+ * ReplaceSettings replaces the shop's settings.
+ *
+ * PUT /api/settings
+ */
+export function replaceSettings(input: Settings, options?: RequestOptions): Promise<Settings> {
+  return call<Settings>("PUT", `/api/settings`, { body: settingsSchema.strip(input) }, options, "json");
 }
 
 /**

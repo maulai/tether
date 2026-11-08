@@ -2,6 +2,8 @@ package tether
 
 import (
 	"encoding"
+	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"sort"
@@ -13,6 +15,35 @@ import (
 	"github.com/maulai/tether/internal/vtag"
 )
 
+// Validate checks v, a struct or a pointer to one, with the rules of its v
+// tags and its enums, exactly as Route checks an input after reading it. It
+// returns nil, or the field errors joined into one error: a handler can
+// return it as it is to answer 422, and Issues lists them. It is for input
+// that does not arrive over HTTP, and for tests of the rules.
+//
+// The generator registers the enums of every type passed to Validate, so
+// the argument must have a named struct type where it is called, not any.
+// Like Route at start-up, Validate panics if v is not a struct or one of
+// its tags has a mistake.
+func Validate(v any) error {
+	rv := reflect.ValueOf(v)
+	if rv.Kind() == reflect.Pointer && !rv.IsNil() {
+		rv = rv.Elem()
+	}
+	if rv.Kind() != reflect.Struct {
+		panic(fmt.Sprintf("tether: Validate needs a struct, not %T", v))
+	}
+	plan, err := structPlanFor(rv.Type())
+	if err != nil {
+		panic(fmt.Sprintf("tether: Validate: %s: %v", rv.Type(), err))
+	}
+	var errs []error
+	for _, is := range validate(rv, plan) {
+		errs = append(errs, &fieldError{is})
+	}
+	return errors.Join(errs...)
+}
+
 // validate checks v against its plan and returns every failed rule, at most
 // one per value: a form shows one message per field, and the first failure
 // is the one worth fixing first.
@@ -20,16 +51,16 @@ import (
 // The order is fixed, and the TypeScript runtime follows it: conditions,
 // required, then the always-on text and enum checks, then the tag's rules
 // in the order they are written, then the contents.
-func validate(v reflect.Value, sp *structPlan) []issue {
+func validate(v reflect.Value, sp *structPlan) []Issue {
 	var c checker
 	c.structFields("", v, sp)
 	return c.issues
 }
 
-type checker struct{ issues []issue }
+type checker struct{ issues []Issue }
 
 func (c *checker) add(path, code string, args map[string]string) {
-	c.issues = append(c.issues, issue{Field: path, Rule: code, Message: message(code, args)})
+	c.issues = append(c.issues, Issue{Field: path, Rule: code, Message: message(code, args)})
 }
 
 func (c *checker) structFields(path string, v reflect.Value, sp *structPlan) {

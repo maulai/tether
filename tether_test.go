@@ -89,13 +89,13 @@ func TestValidationProblem(t *testing.T) {
 		t.Errorf("problem %+v", p)
 	}
 	// Decoding problems come first; validation runs only on input that fits.
-	if len(p.Errors) != 1 || p.Errors[0] != (issue{Field: "extra", Rule: "unknown", Message: "Unknown field."}) {
+	if len(p.Errors) != 1 || p.Errors[0] != (Issue{Field: "extra", Rule: "unknown", Message: "Unknown field."}) {
 		t.Errorf("errors %+v", p.Errors)
 	}
 
 	rec = serve(t, "POST /tasks", createTask, httptest.NewRequest("POST", "/tasks", strings.NewReader(`{"title":"   "}`)))
 	p = decodeProblem(t, rec)
-	if len(p.Errors) != 1 || p.Errors[0] != (issue{Field: "title", Rule: "required", Message: "Required."}) {
+	if len(p.Errors) != 1 || p.Errors[0] != (Issue{Field: "title", Rule: "required", Message: "Required."}) {
 		t.Errorf("errors %+v", p.Errors)
 	}
 }

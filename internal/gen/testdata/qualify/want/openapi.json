@@ -1,0 +1,364 @@
+{
+  "components": {
+    "responses": {
+      "BadRequest": {
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        },
+        "description": "The request body could not be read."
+      },
+      "Error": {
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        },
+        "description": "Any other error."
+      },
+      "Invalid": {
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        },
+        "description": "The input failed validation; errors names the fields."
+      }
+    },
+    "schemas": {
+      "Document": {
+        "description": "Document is named like its package, so it stays Document.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DocumentStatus"
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ],
+        "type": "object"
+      },
+      "DocumentStatus": {
+        "description": "Status is where a document stands.",
+        "enum": [
+          "draft",
+          "issued"
+        ],
+        "type": "string"
+      },
+      "FieldError": {
+        "properties": {
+          "field": {
+            "description": "Path in the input, with dots and indices: items.2.sku.",
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "rule": {
+            "description": "The rule that failed; missing for errors written by a handler.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "field",
+          "message"
+        ],
+        "type": "object"
+      },
+      "HttpxPage_TaxVatRate": {
+        "description": "Page is one page of a list.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TaxVatRate"
+            },
+            "type": "array"
+          },
+          "total": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "type": "object"
+      },
+      "Problem": {
+        "description": "RFC 9457 problem details.",
+        "properties": {
+          "detail": {
+            "type": "string"
+          },
+          "errors": {
+            "items": {
+              "$ref": "#/components/schemas/FieldError"
+            },
+            "type": "array"
+          },
+          "status": {
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status"
+        ],
+        "type": "object"
+      },
+      "StockItem": {
+        "description": "Item is an item in stock.",
+        "properties": {
+          "sku": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/StockStatus"
+          }
+        },
+        "required": [
+          "sku",
+          "status"
+        ],
+        "type": "object"
+      },
+      "StockStatus": {
+        "description": "Status is whether an item is in stock.",
+        "enum": [
+          "in",
+          "out"
+        ],
+        "type": "string"
+      },
+      "TaxClass": {
+        "description": "Class is the tax class of a rate.",
+        "enum": [
+          "standard",
+          "reduced"
+        ],
+        "type": "string"
+      },
+      "TaxRule": {
+        "description": "TaxRule starts with the package name as a word, so it keeps its name.",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "TaxTaxonomy": {
+        "description": "Taxonomy starts with \"Tax\" but not as a word, so it gets the prefix.",
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "TaxVatRate": {
+        "description": "VatRate is a rate as the API returns it.",
+        "properties": {
+          "class": {
+            "$ref": "#/components/schemas/TaxClass"
+          },
+          "percent": {
+            "type": "number"
+          },
+          "rule": {
+            "$ref": "#/components/schemas/TaxRule"
+          },
+          "tree": {
+            "$ref": "#/components/schemas/TaxTaxonomy"
+          }
+        },
+        "required": [
+          "class",
+          "percent",
+          "rule",
+          "tree"
+        ],
+        "type": "object"
+      },
+      "TaxVatRateInput": {
+        "additionalProperties": false,
+        "description": "VatRateInput creates a rate.",
+        "properties": {
+          "class": {
+            "$ref": "#/components/schemas/TaxClass",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "percent": {
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "class"
+        ],
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "Qualify",
+    "version": "1.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/v1/documents/{id}": {
+      "get": {
+        "operationId": "getDocument",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Document"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "422": {
+            "$ref": "#/components/responses/Invalid"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "summary": "GetDocument returns a document."
+      }
+    },
+    "/v1/stock/{sku}": {
+      "get": {
+        "operationId": "getStock",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sku",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StockItem"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "422": {
+            "$ref": "#/components/responses/Invalid"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "summary": "GetStock returns an item in stock."
+      }
+    },
+    "/v1/vat-rates": {
+      "get": {
+        "operationId": "listVatRates",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpxPage_TaxVatRate"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "422": {
+            "$ref": "#/components/responses/Invalid"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "summary": "ListVatRates returns the rates."
+      },
+      "post": {
+        "operationId": "createVatRate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaxVatRateInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaxVatRate"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "422": {
+            "$ref": "#/components/responses/Invalid"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "summary": "CreateVatRate adds a rate."
+      }
+    }
+  }
+}

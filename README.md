@@ -71,6 +71,11 @@ body otherwise. tether decodes and validates `In` before your handler runs;
 invalid input never reaches it. `Out` is written as JSON (`201` for `POST`,
 `200` else).
 
+A `PUT` replaces the whole record, so its body must send every field;
+`null` or an empty value clears one. A forgotten field is an error
+(`missing`) instead of a value cleared without notice, and the generated
+TypeScript type asks for all of them.
+
 Path parameters are read as usual with `r.PathValue("id")`, or parsed into
 a type; a value that does not parse answers 404 before your code runs:
 
@@ -159,12 +164,15 @@ go generate ./...
 ```
 
 This writes `openapi.json`, `web/src/api/index.ts` and `web/src/api/runtime.ts`,
-and a `tether_gen.go` into packages that declare enums. Commit them. In CI,
-fail when they are out of date:
+and a `tether_gen.go` that registers enums into the packages whose handlers
+use them. Commit them. In CI, fail when they are out of date:
 
 ```sh
 go tool tether -out web/src/api -check
 ```
+
+If two packages use the same type name, add `-qualify`: every type name
+then starts with its package, `document.Status` becomes `DocumentStatus`.
 
 ## Frontend
 
@@ -228,6 +236,10 @@ text must not contain control characters, direction overrides or line
 separators; nested structs are validated too. An empty optional text skips
 its rules, and a missing number is `0`, as in Go. For a number that must be
 sent, use a pointer.
+
+The same checks run without a route, for input that does not come over
+HTTP and in tests: `tether.Validate(v)` returns the field errors, and
+`tether.Issues(err)` lists them.
 
 **Enums** are plain Go: a string type and its constants, in any package or
 module. tether finds them; the generated `tether_gen.go` in the package of

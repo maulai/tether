@@ -168,14 +168,14 @@ func (h *handler) readInput(w http.ResponseWriter, r *http.Request) (reflect.Val
 			writeProblem(w, http.StatusBadRequest, message("malformed", nil), nil)
 			return in, false
 		case err != nil:
-			writeIssues(w, []issue{{Field: "file", Rule: "required", Message: message("required", nil)}})
+			writeIssues(w, []Issue{{Field: "file", Rule: "required", Message: message("required", nil)}})
 			return in, false
 		}
 		in.Set(reflect.ValueOf(up))
 		return in, true
 	}
 
-	var issues []issue
+	var issues []Issue
 	if h.query {
 		issues = decodeQuery(r.URL.Query(), in, h.plan)
 	} else {
@@ -193,7 +193,7 @@ func (h *handler) readInput(w http.ResponseWriter, r *http.Request) (reflect.Val
 			}
 			return in, false
 		}
-		issues, err = decodeBody(data, in, h.plan)
+		issues, err = decodeBody(data, in, h.plan, h.method == http.MethodPut)
 		if err != nil {
 			writeProblem(w, http.StatusBadRequest, message("malformed", nil), nil)
 			return in, false
@@ -211,16 +211,16 @@ func (h *handler) readInput(w http.ResponseWriter, r *http.Request) (reflect.Val
 
 // unknownQuery rejects query parameters where the route takes none. A
 // parameter the server ignores looks like a filter that worked.
-func unknownQuery(r *http.Request) []issue {
-	var issues []issue
+func unknownQuery(r *http.Request) []Issue {
+	var issues []Issue
 	for k := range r.URL.Query() {
-		issues = append(issues, issue{Field: k, Rule: "unknown", Message: message("unknown", nil)})
+		issues = append(issues, Issue{Field: k, Rule: "unknown", Message: message("unknown", nil)})
 	}
 	sortIssues(issues)
 	return issues
 }
 
-func sortIssues(issues []issue) {
+func sortIssues(issues []Issue) {
 	sort.Slice(issues, func(i, j int) bool { return issues[i].Field < issues[j].Field })
 }
 

@@ -107,9 +107,12 @@ func writeDoc(b *strings.Builder, indent, doc string) {
 
 func escapeComment(s string) string { return strings.ReplaceAll(s, "*/", "*\\/") }
 
-// optional reports whether a field may be missing in TypeScript.
+// optional reports whether a field may be missing in TypeScript. An input
+// field is optional unless it is required. A PUT replaces the whole record,
+// so a struct it reads must be sent with every field; like an output field,
+// it may be missing only with omitempty or omitzero.
 func optional(d *structDef, f *fieldDef) bool {
-	if d.in {
+	if d.in && !d.whole {
 		return !f.required()
 	}
 	return f.omitEmpty
@@ -303,9 +306,11 @@ func enumList(e *enumDef) string {
 	return valuesName(e)
 }
 
+// hasRequired reports whether an input must be passed: whether it has a
+// field that is not optional.
 func hasRequired(d *structDef) bool {
 	for _, f := range d.fields {
-		if f.required() {
+		if !optional(d, f) {
 			return true
 		}
 	}

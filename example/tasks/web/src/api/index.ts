@@ -36,9 +36,9 @@ export interface TaskInput {
   title: string;
   status: Status;
   /** Reason says why a blocked task cannot go on. */
-  reason?: string;
-  due?: string | null;
-  tags?: string[];
+  reason: string;
+  due: string | null;
+  tags: string[];
 }
 
 // ── Validators ────────────────────────────────────────────────────────────

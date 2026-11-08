@@ -5,12 +5,14 @@ import { createTask, getTask, listTasks, updateTask, deleteTask, exportTasks, im
 
 configure({ baseUrl: process.argv[2] ?? "" });
 
-const task = await createTask({ title: "Write the README", status: "open", tags: ["docs"] });
+// TaskInput is also what UpdateTask reads with PUT, so its type asks for
+// every field: empty is "", null or [].
+const task = await createTask({ title: "Write the README", status: "open", reason: "", due: null, tags: ["docs"] });
 assert.equal(task.title, "Write the README");
 assert.deepEqual(task.tags, ["docs"]);
 
 // The browser and the server report the same errors for the same input.
-const bad = { title: " ", status: "blocked" as const, tags: ["", "x".repeat(31), "Docs"] };
+const bad = { title: " ", status: "blocked" as const, reason: "", due: null, tags: ["", "x".repeat(31), "Docs"] };
 const local = taskInputSchema.validate(bad);
 try {
   await createTask(bad);
@@ -28,7 +30,7 @@ assert.equal(local[4]?.message, "Use lower case letters, digits and dashes.");
 
 // A handler's own field error arrives the same way.
 try {
-  await createTask({ title: "write the readme", status: "open" });
+  await createTask({ title: "write the readme", status: "open", reason: "", due: null, tags: [] });
   assert.fail("expected a validation error");
 } catch (e) {
   assert.ok(e instanceof ValidationError);
@@ -51,7 +53,21 @@ try {
   assert.deepEqual(e.errors, taskFilterSchema.validate(filter));
   assert.equal(e.errors[0]?.field, "tags.0");
 }
-const done = await updateTask(task.id, { title: "Write the README", status: "done" });
+const done = await updateTask(task.id, { ...task, status: "done" });
+assert.deepEqual(done.tags, ["docs"]); // sent along, so kept
+
+// A PUT from outside the client that forgets fields is refused instead of
+// clearing them.
+const partial = await fetch(`${process.argv[2]}/v1/tasks/${task.id}`, {
+  method: "PUT",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ title: "Write the README", status: "done" }),
+});
+assert.equal(partial.status, 422);
+assert.deepEqual(
+  (await partial.json()).errors.map((e: { field: string; rule: string }) => e.field + ":" + e.rule),
+  ["due:missing", "reason:missing", "tags:missing"],
+);
 assert.equal(done.status, "done");
 assert.match(await (await exportTasks()).text(), /Write the README/);
 await deleteTask(task.id);

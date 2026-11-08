@@ -13,6 +13,7 @@ var Default = map[string]string{
 	"type":        "Invalid value.",
 	"integer":     "Must be a whole number.",
 	"unknown":     "Unknown field.",
+	"missing":     "Missing. A PUT sends every field; null or an empty value clears it.",
 	"text":        "Contains invisible control characters.",
 	"minLength":   "Must be at least {min} characters.",
 	"maxLength":   "Must be at most {max} characters.",

@@ -52,3 +52,12 @@ func Routes(mux *http.ServeMux) {
 func init() {
 	tether.Pattern("blank", `x`, "")
 }
+
+// Count is checked outside a route, with the same checks as an input.
+type Count struct {
+	N int `json:"n" v:"required"`
+}
+
+func checkCount(c Count) error { return tether.Validate(c) }
+
+func checkAny(v any) error { return tether.Validate(v) }

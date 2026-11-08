@@ -26,6 +26,9 @@ type Options struct {
 	Title    string   // OpenAPI info.title
 	Version  string   // OpenAPI info.version
 	Tool     string   // tether's own version, named in file headers
+	// Qualify starts every type name in TypeScript and OpenAPI with its
+	// package name, for programs that use one name in several packages.
+	Qualify bool
 }
 
 // File is one output. Data nil means the file must not exist.
@@ -71,7 +74,7 @@ func Generate(o Options) ([]File, error) {
 		}
 		jsPatterns[name] = js
 	}
-	m := newModel(p)
+	m := newModel(p, o.Qualify)
 	if len(p.errs) > 0 {
 		sort.Strings(p.errs)
 		return nil, fmt.Errorf("%d problem(s):\n  %s", len(p.errs), strings.Join(dedupe(p.errs), "\n  "))

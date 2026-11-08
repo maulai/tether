@@ -8,14 +8,16 @@ import (
 	"strconv"
 )
 
-// issue is one field error as it travels in a response.
-type issue struct {
+// Issue is one field error: the path of the field in the JSON input, the
+// rule that failed (empty for a FieldError) and the finished text. A 422
+// response lists them in errors.
+type Issue struct {
 	Field   string `json:"field"`
 	Rule    string `json:"rule,omitempty"`
 	Message string `json:"message"`
 }
 
-type fieldError struct{ issue }
+type fieldError struct{ Issue }
 
 func (e *fieldError) Error() string { return e.Field + ": " + e.Message }
 
@@ -25,7 +27,7 @@ func (e *fieldError) Error() string { return e.Field + ": " + e.Message }
 //
 // field is the path in the JSON input: "username", "items.2.sku".
 func FieldError(field, message string) error {
-	return &fieldError{issue{Field: field, Message: message}}
+	return &fieldError{Issue{Field: field, Message: message}}
 }
 
 type failError struct {
@@ -47,11 +49,11 @@ type problem struct {
 	Title  string  `json:"title"`
 	Status int     `json:"status"`
 	Detail string  `json:"detail,omitempty"`
-	Errors []issue `json:"errors,omitempty"`
+	Errors []Issue `json:"errors,omitempty"`
 }
 
 // writeProblem writes an RFC 9457 problem document.
-func writeProblem(w http.ResponseWriter, status int, detail string, issues []issue) {
+func writeProblem(w http.ResponseWriter, status int, detail string, issues []Issue) {
 	body, _ := json.Marshal(problem{
 		Type:   "about:blank",
 		Title:  http.StatusText(status),
@@ -66,7 +68,7 @@ func writeProblem(w http.ResponseWriter, status int, detail string, issues []iss
 	w.Write(body)
 }
 
-func writeIssues(w http.ResponseWriter, issues []issue) {
+func writeIssues(w http.ResponseWriter, issues []Issue) {
 	writeProblem(w, http.StatusUnprocessableEntity, message("invalid", nil), issues)
 }
 
@@ -117,12 +119,19 @@ func internal(w http.ResponseWriter, r *http.Request, status int, err error) {
 	writeProblem(w, status, message("internal", nil), nil)
 }
 
-func collectIssues(err error, out []issue) []issue {
+// Issues lists the field errors in err as a 422 response would: those of
+// Validate, of FieldError, and of errors.Join over them. It is nil when err
+// holds none. Tests use it to check which fields fail and why.
+func Issues(err error) []Issue {
+	return collectIssues(err, nil)
+}
+
+func collectIssues(err error, out []Issue) []Issue {
 	switch e := err.(type) {
 	case nil:
 		return out
 	case *fieldError:
-		return append(out, e.issue)
+		return append(out, e.Issue)
 	case interface{ Unwrap() []error }:
 		for _, sub := range e.Unwrap() {
 			out = collectIssues(sub, out)

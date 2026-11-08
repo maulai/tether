@@ -36,11 +36,20 @@ type program struct {
 	varInits map[*types.Var]ast.Expr
 	infoOf   map[*ast.File]*types.Info
 
-	routes   []*route
-	patterns map[string]pattern // by rule name
-	checks   []string
-	messages map[string]string // nil: no Messages call
-	errs     []string
+	routes    []*route
+	validates []validateCall
+	patterns  map[string]pattern // by rule name
+	checks    []string
+	messages  map[string]string // nil: no Messages call
+	errs      []string
+}
+
+// validateCall is one tether.Validate call: the type of its argument and
+// the package that makes it, which registers the enums of that type.
+type validateCall struct {
+	pkg *types.Package
+	typ types.Type
+	pos token.Pos
 }
 
 // pattern is one tether.Pattern call.
@@ -133,7 +142,7 @@ func load(dir string, patterns []string) (*program, error) {
 	}
 	for _, pkg := range pkgs {
 		for _, f := range pkg.Syntax {
-			p.scan(pkg.TypesInfo, f)
+			p.scan(pkg.Types, pkg.TypesInfo, f)
 		}
 	}
 	sort.Slice(p.routes, func(i, j int) bool {
@@ -201,7 +210,7 @@ func (p *program) index(info *types.Info, f *ast.File) {
 }
 
 // scan finds the calls into tether that the generator must read.
-func (p *program) scan(info *types.Info, f *ast.File) {
+func (p *program) scan(pkg *types.Package, info *types.Info, f *ast.File) {
 	ast.Inspect(f, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
@@ -234,6 +243,10 @@ func (p *program) scan(info *types.Info, f *ast.File) {
 			}
 		case "Messages":
 			p.readMessages(info, call)
+		case "Validate":
+			if len(call.Args) == 1 {
+				p.validates = append(p.validates, validateCall{pkg: pkg, typ: info.TypeOf(call.Args[0]), pos: call.Args[0].Pos()})
+			}
 		}
 		return true
 	})

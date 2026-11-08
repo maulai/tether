@@ -20,6 +20,7 @@ const messages: Record<string, string> = {
   min: "Mindestens {min}.",
   minItems: "Mindestens {min} Einträge.",
   minLength: "Mindestens {min} Zeichen.",
+  missing: "Fehlt. Bei PUT gehört jedes Feld dazu; null oder ein leerer Wert leert es.",
   network: "Der Server ist nicht erreichbar.",
   notFound: "Nicht gefunden.",
   oneof: "Erlaubt sind: {values}.",
