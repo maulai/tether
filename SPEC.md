@@ -728,11 +728,26 @@ Validators do not change values. Dates are ISO strings in both directions.
 
 tether uses semantic versioning, `v0.x` until the API is stable. CI
 releases every push to `main` that passes the tests: it tags the next
-version and creates a GitHub release with generated notes. A commit chooses
-the step with a trailer line `Release: minor`, `Release: major`, or
-`Release: none` for changes that need no release (documentation, CI);
-without one the step is a patch. Projects pin a version as a tool
-dependency:
+version and creates a GitHub release. A commit chooses the step with a
+trailer line `Release: minor`, `Release: major`, or `Release: none` for
+changes that need no release (documentation, CI); without one the step is
+a patch.
+
+The release notes come from the commits as well. Trailer lines at the end
+of a message, in the block with `Release:`, say what a user of tether must
+know: `Breaking:` for a change that needs work in a project, `Added:` for
+something new, `Fixed:` for a bug that is gone. The notes list them by
+kind, breaking changes first; a release without any lists its commit
+subjects. A `Breaking:` trailer needs a step that may break, minor while
+the major version is 0; ci fails otherwise, before the push is released.
+
+```
+Breaking: A handler takes its path parameters as arguments; PathValue is gone.
+Added: tether.Format checks a text type such as uuid.UUID in the browser.
+Release: minor
+```
+
+Projects pin a version as a tool dependency:
 
 ```
 go get -tool github.com/maulai/tether/cmd/tether@v0.1.0

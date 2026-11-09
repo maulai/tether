@@ -3,7 +3,9 @@ name: release
 # Every push to main that passes ci is released. A Go module is released by
 # its tag alone, so there is nothing to build; the GitHub release only adds
 # notes. The step comes from the commit messages, see scripts/next-version.sh:
-# a trailer line "Release: minor", "Release: major" or "Release: none".
+# a trailer line "Release: minor", "Release: major" or "Release: none". The
+# notes come from the trailers Breaking:, Added: and Fixed:, see
+# scripts/release-notes.sh.
 
 on:
   workflow_run:
@@ -35,9 +37,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
         run: |
+          .github/scripts/release-notes.sh "$TAG" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" > "$RUNNER_TEMP/notes.md"
           git tag "$TAG"
           git push origin "$TAG"
-          gh release create "$TAG" --title "$TAG" --generate-notes --verify-tag
+          gh release create "$TAG" --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag
           # Ask the Go module proxy for the new version, so pkg.go.dev lists it
           # without waiting for the first user.
           module=$(awk '/^module /{print $2}' go.mod)

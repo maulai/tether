@@ -10,6 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the tags, for the release step and its notes
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -30,3 +32,9 @@ jobs:
       - name: Example is generated
         working-directory: example/tasks
         run: go tool tether -out web/src/api -title Tasks -version 1.0.0 -check
+      # A breaking change with too small a step fails here, before it is
+      # released; the notes show what the release would say.
+      - name: Release step and notes
+        run: |
+          tag=$(.github/scripts/next-version.sh)
+          if [ -n "$tag" ]; then .github/scripts/release-notes.sh "$tag"; fi
