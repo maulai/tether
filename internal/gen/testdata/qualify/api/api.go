@@ -23,10 +23,12 @@ func CreateVatRate(r *http.Request, in tax.VatRateInput) (tax.VatRate, error) {
 }
 
 // GetDocument returns a document.
-func GetDocument(r *http.Request) (document.Document, error) { return document.Document{}, nil }
+func GetDocument(r *http.Request, id string) (document.Document, error) {
+	return document.Document{}, nil
+}
 
 // GetStock returns an item in stock.
-func GetStock(r *http.Request) (stock.Item, error) { return stock.Item{}, nil }
+func GetStock(r *http.Request, sku string) (stock.Item, error) { return stock.Item{}, nil }
 
 // Routes registers the API.
 func Routes(mux *http.ServeMux) {

@@ -28,10 +28,17 @@ interface VectorCase {
 
 const colors = ["red", "green", "blue"];
 
+const vectors: { formats?: Record<string, { type: string }>; cases: VectorCase[] } = JSON.parse(readFileSync(process.argv[2], "utf8"));
+// The format of each vector type that has one, such as code.
+const formats = Object.fromEntries(Object.entries(vectors.formats ?? {}).map(([name, f]) => [f.type, name]));
+
 function base(f: VectorField): FieldSpec {
   if (f.type === "[]byte") return { type: "bytes" };
   if (f.type === "map[color]string") return { type: "record", keys: colors, elem: { type: "string" } };
-  switch (f.type.replace(/^\*/, "").replace(/^\[\]/, "")) {
+  const name = f.type.replace(/^\*/, "").replace(/^\[\]/, "");
+  const format = formats[name];
+  if (format) return { type: "string", format };
+  switch (name) {
     case "string":
       return { type: "string" };
     case "int":
@@ -67,7 +74,6 @@ function specs(fields: VectorField[]): Record<string, FieldSpec> {
   return Object.fromEntries(fields.map((f) => [f.name, spec(f)]));
 }
 
-const vectors: { cases: VectorCase[] } = JSON.parse(readFileSync(process.argv[2], "utf8"));
 let failed = 0;
 for (const c of vectors.cases) {
   const want = c.browser ?? c.errors;

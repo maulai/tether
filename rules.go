@@ -87,6 +87,53 @@ func Pattern(name, expr, message string) {
 	registerRule(name, projectRule{re: re, message: message})
 }
 
+// Format registers the text form of T, a type that reads itself with
+// UnmarshalText, such as uuid.UUID. Every value of T, in a field at any
+// depth, in the query string or in a path, must then match expr as a whole
+// before UnmarshalText sees it, on the server and, translated to JavaScript,
+// in the browser; a value that does not match is reported with message, as
+// rule name. "" means "not given", as for a number. In OpenAPI, name is the
+// format of the type.
+//
+//	tether.Format[uuid.UUID]("uuid", `[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`, "Not a valid ID.")
+//
+// name is also a rule that tags can use on plain strings. Call it from an
+// init function with constant arguments, so the generator can read them; it
+// reports an input of a type with UnmarshalText that has no Format. It
+// panics at start-up for a T without UnmarshalText and for an invalid
+// name or pattern.
+func Format[T any](name, expr, message string) {
+	t := reflect.TypeFor[T]()
+	if t == timeType || !reflect.PointerTo(t).Implements(textUnmarshaler) {
+		panic(fmt.Sprintf("tether: format %s: %s does not read itself with UnmarshalText", name, t))
+	}
+	Pattern(name, expr, message)
+	r, _ := lookupRule(name)
+	formatMu.Lock()
+	defer formatMu.Unlock()
+	if _, ok := formats[t]; ok {
+		panic(fmt.Sprintf("tether: format of %s registered twice", t))
+	}
+	formats[t] = format{name: name, re: r.re}
+}
+
+type format struct {
+	name string
+	re   *regexp.Regexp
+}
+
+var (
+	formatMu sync.RWMutex
+	formats  = map[reflect.Type]format{}
+)
+
+func formatFor(t reflect.Type) (format, bool) {
+	formatMu.RLock()
+	defer formatMu.RUnlock()
+	f, ok := formats[t]
+	return f, ok
+}
+
 // Check registers a project rule implemented in Go. It runs on the server
 // only; the browser lets the value through and the server reports it. Use
 // it for what a pattern cannot express, such as check digits.

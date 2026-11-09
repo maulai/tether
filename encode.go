@@ -43,7 +43,7 @@ type Upload struct {
 func writeJSON(w http.ResponseWriter, r *http.Request, status int, v reflect.Value) {
 	body, err := json.Marshal(normalize(v).Interface())
 	if err != nil {
-		internal(w, r, http.StatusInternalServerError, err)
+		internal(w, r, err)
 		return
 	}
 	body = append(body, '\n')
@@ -95,8 +95,9 @@ func writeFile(w http.ResponseWriter, r *http.Request, f File) {
 // name internal hosts or buckets. A 416 keeps its Content-Range header.
 type problemWriter struct {
 	http.ResponseWriter
-	r      *http.Request
-	status int // the error status ServeContent chose, 0 while there is none
+	r        *http.Request
+	status   int    // the error status ServeContent chose, 0 while there is none
+	instance string // names a server error in the response and the log
 }
 
 func (p *problemWriter) WriteHeader(code int) {
@@ -106,13 +107,13 @@ func (p *problemWriter) WriteHeader(code int) {
 		p.ResponseWriter.WriteHeader(code)
 	case code == http.StatusRequestedRangeNotSatisfiable:
 		p.status = code
-		writeProblem(p.ResponseWriter, code, message("range", nil), nil)
+		writeStatus(p.ResponseWriter, code, "range")
 	case code >= 500:
-		p.status = code
-		writeProblem(p.ResponseWriter, code, message("internal", nil), nil)
+		p.status, p.instance = code, newInstance()
+		writeProblem(p.ResponseWriter, problem{Status: code, Detail: message("internal", nil), Instance: p.instance})
 	default:
 		p.status = code
-		writeProblem(p.ResponseWriter, code, "", nil)
+		writeProblem(p.ResponseWriter, problem{Status: code})
 	}
 }
 
@@ -123,7 +124,7 @@ func (p *problemWriter) Write(b []byte) (int, error) {
 		return p.ResponseWriter.Write(b)
 	}
 	if p.status >= 500 {
-		slog.ErrorContext(p.r.Context(), "tether: serving a file failed", "method", p.r.Method, "path", p.r.URL.Path, "error", strings.TrimSpace(string(b)))
+		slog.ErrorContext(p.r.Context(), "tether: serving a file failed", "method", p.r.Method, "path", p.r.URL.Path, "instance", p.instance, "error", strings.TrimSpace(string(b)))
 	}
 	return len(b), nil
 }

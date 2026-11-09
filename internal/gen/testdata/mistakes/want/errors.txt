@@ -1,19 +1,31 @@
-18 problem(s):
+30 problem(s):
   internal/gen/testdata/mistakes/hidden/hidden.go:8:2: constant levelLow of enum Level is not exported, so package github.com/maulai/tether/internal/gen/testdata/mistakes cannot register it; export it
-  internal/gen/testdata/mistakes/mistakes.go:13:2: Input.count: required on a plain integer cannot tell a missing value from 0; use a pointer, or min to forbid zero
-  internal/gen/testdata/mistakes/mistakes.go:14:2: Input.name: unknown rule "bogus"
-  internal/gen/testdata/mistakes/mistakes.go:15:2: Input.rate: rule gt does not apply to a string
-  internal/gen/testdata/mistakes/mistakes.go:16:2: Input.when: requiredif refers to unknown field "missing"
-  internal/gen/testdata/mistakes/mistakes.go:18:2: Input.note: requiredif compares boolean flag with "yes"; use true, false or nothing
-  internal/gen/testdata/mistakes/mistakes.go:19:2: Input.things (elements): rule email does not apply to an integer
-  internal/gen/testdata/mistakes/mistakes.go:24:2: Filter.nested: a query parameter must be a scalar or a list of scalars
-  internal/gen/testdata/mistakes/mistakes.go:28:2: Out.ch: type chan int cannot be sent as JSON
-  internal/gen/testdata/mistakes/mistakes.go:32:6: handler github.com/maulai/tether/internal/gen/testdata/mistakes.Delete: "delete" is a reserved word in TypeScript; rename it
-  internal/gen/testdata/mistakes/mistakes.go:45:40: WrongShape must have the shape func(*http.Request[, In]) ([Out, ]error)
-  internal/gen/testdata/mistakes/mistakes.go:46:43: Pointer: the input must be a struct, not *github.com/maulai/tether/internal/gen/testdata/mistakes.Input
-  internal/gen/testdata/mistakes/mistakes.go:47:26: this argument must be a string constant, so tether can read it
-  internal/gen/testdata/mistakes/mistakes.go:48:43: the handler must be a named function or method, so tether can name the TypeScript function after it
-  internal/gen/testdata/mistakes/mistakes.go:49:13: "FETCH /x": the pattern must start with GET, POST, PUT, PATCH or DELETE
-  internal/gen/testdata/mistakes/mistakes.go:53:31: rule blank needs a message
-  internal/gen/testdata/mistakes/mistakes.go:58:2: Count.n: required on a plain integer cannot tell a missing value from 0; use a pointer, or min to forbid zero
-  internal/gen/testdata/mistakes/mistakes.go:63:53: tether.Validate needs a value of a named, non-generic struct type here, so tether can register the enums it uses
+  internal/gen/testdata/mistakes/mistakes.go:100:2: Count.n: required on a plain integer cannot tell a missing value from 0; use a pointer, or min to forbid zero
+  internal/gen/testdata/mistakes/mistakes.go:105:53: tether.Validate needs a value of a named, non-generic struct type here, so tether can register the enums it uses
+  internal/gen/testdata/mistakes/mistakes.go:14:2: Input.count: required on a plain integer cannot tell a missing value from 0; use a pointer, or min to forbid zero
+  internal/gen/testdata/mistakes/mistakes.go:15:2: Input.name: unknown rule "bogus"
+  internal/gen/testdata/mistakes/mistakes.go:16:2: Input.rate: rule gt does not apply to a string
+  internal/gen/testdata/mistakes/mistakes.go:17:2: Input.when: requiredif refers to unknown field "missing"
+  internal/gen/testdata/mistakes/mistakes.go:19:2: Input.note: requiredif compares boolean flag with "yes"; use true, false or nothing
+  internal/gen/testdata/mistakes/mistakes.go:20:2: Input.things (elements): rule email does not apply to an integer
+  internal/gen/testdata/mistakes/mistakes.go:22:2: Input.tokens: mistakes.Token reads itself with UnmarshalText; register its text form with tether.Format, so the browser checks it as the server does
+  internal/gen/testdata/mistakes/mistakes.go:40:2: Query.q: the query parameter has the name of the path parameter {q} of GET /g/{q}; rename one
+  internal/gen/testdata/mistakes/mistakes.go:44:2: Filter.nested: a query parameter must be a scalar or a list of scalars
+  internal/gen/testdata/mistakes/mistakes.go:48:2: Out.ch: type chan int cannot be sent as JSON
+  internal/gen/testdata/mistakes/mistakes.go:52:6: handler github.com/maulai/tether/internal/gen/testdata/mistakes.Delete: "delete" is a reserved word in TypeScript; rename it
+  internal/gen/testdata/mistakes/mistakes.go:59:33: WrongName: parameter key stands where the pattern has {id}; name it id, or _ when the handler does not need it
+  internal/gen/testdata/mistakes/mistakes.go:60:31: BadPath: path parameter {id} cannot be read into []string; a path parameter is a string, number, boolean, enum, time.Time or a type with UnmarshalText
+  internal/gen/testdata/mistakes/mistakes.go:61:28: Rest: {p...} is the rest of the path and must be a string
+  internal/gen/testdata/mistakes/mistakes.go:62:31: ByToken {tok}: mistakes.Token reads itself with UnmarshalText; register its text form with tether.Format, so the browser checks it as the server does
+  internal/gen/testdata/mistakes/mistakes.go:64:34: InputFirst: parameter in stands where the pattern has {id}; name it id, or _ when the handler does not need it
+  internal/gen/testdata/mistakes/mistakes.go:73:40: WrongShape must have the shape func(r *http.Request[, path parameters][, in In]) ([Out, ]error)
+  internal/gen/testdata/mistakes/mistakes.go:74:43: Pointer: the input must be a struct, not *github.com/maulai/tether/internal/gen/testdata/mistakes.Input
+  internal/gen/testdata/mistakes/mistakes.go:75:26: this argument must be a string constant, so tether can read it
+  internal/gen/testdata/mistakes/mistakes.go:76:43: the handler must be a named function or method, so tether can name the TypeScript function after it
+  internal/gen/testdata/mistakes/mistakes.go:77:13: "FETCH /x": the pattern must start with GET, POST, PUT, PATCH or DELETE
+  internal/gen/testdata/mistakes/mistakes.go:78:41: NoParam: the pattern has 1 path parameter(s), {id}; the handler takes them after r, in order, then its input: func(r *http.Request[, path parameters][, in In]) ([Out, ]error)
+  internal/gen/testdata/mistakes/mistakes.go:84:41: InputFirst: the input must be a struct, not int
+  internal/gen/testdata/mistakes/mistakes.go:88:66: problem code "Bad-Code" must be lowerCamel, like mfaRequired, so the client can name a function after it
+  internal/gen/testdata/mistakes/mistakes.go:89:38: problem okay: status 200 is not an error status
+  internal/gen/testdata/mistakes/mistakes.go:91:15: problem code twice is declared twice, also at internal/gen/testdata/mistakes/mistakes.go:90:15; declare it once and use With for another text
+  internal/gen/testdata/mistakes/mistakes.go:95:31: rule blank needs a message

@@ -6,12 +6,11 @@ package main
 //go:generate go tool tether -out web/src/api -title Tasks -version 1.0.0
 
 import (
+	"crypto/subtle"
 	"errors"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
-	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -49,7 +48,7 @@ type TaskInput struct {
 
 // Task is a task as the API returns it.
 type Task struct {
-	ID string `json:"id"`
+	ID int `json:"id"`
 	TaskInput
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -63,7 +62,7 @@ type TaskFilter struct {
 
 var (
 	mu    sync.Mutex
-	tasks = map[string]Task{}
+	tasks = map[int]Task{}
 	next  = 0
 )
 
@@ -82,30 +81,30 @@ func ListTasks(r *http.Request, f TaskFilter) ([]Task, error) {
 }
 
 // GetTask returns one task.
-func GetTask(r *http.Request) (Task, error) {
+func GetTask(r *http.Request, id int) (Task, error) {
 	mu.Lock()
 	defer mu.Unlock()
-	return find(r)
+	return find(id)
 }
 
 // CreateTask adds a task.
 func CreateTask(r *http.Request, in TaskInput) (Task, error) {
 	mu.Lock()
 	defer mu.Unlock()
-	if taken(in.Title, "") {
+	if taken(in.Title, 0) {
 		return Task{}, tether.FieldError("title", "A task with this title exists already.")
 	}
 	next++
-	t := Task{ID: strconv.Itoa(next), TaskInput: in, CreatedAt: time.Now()}
+	t := Task{ID: next, TaskInput: in, CreatedAt: time.Now()}
 	tasks[t.ID] = t
 	return t, nil
 }
 
 // UpdateTask replaces a task's fields.
-func UpdateTask(r *http.Request, in TaskInput) (Task, error) {
+func UpdateTask(r *http.Request, id int, in TaskInput) (Task, error) {
 	mu.Lock()
 	defer mu.Unlock()
-	t, err := find(r)
+	t, err := find(id)
 	if err != nil {
 		return Task{}, err
 	}
@@ -118,10 +117,10 @@ func UpdateTask(r *http.Request, in TaskInput) (Task, error) {
 }
 
 // DeleteTask removes a task.
-func DeleteTask(r *http.Request) error {
+func DeleteTask(r *http.Request, id int) error {
 	mu.Lock()
 	defer mu.Unlock()
-	delete(tasks, r.PathValue("id"))
+	delete(tasks, id)
 	return nil
 }
 
@@ -139,11 +138,11 @@ func ImportTasks(r *http.Request, f tether.Upload) ([]Task, error) {
 		if title == "" {
 			continue
 		}
-		if taken(title, "") {
+		if taken(title, 0) {
 			return nil, tether.FieldError("file", "A task named "+strconv.Quote(title)+" exists already.")
 		}
 		next++
-		t := Task{ID: strconv.Itoa(next), TaskInput: TaskInput{Title: title, Status: StatusOpen}, CreatedAt: time.Now()}
+		t := Task{ID: next, TaskInput: TaskInput{Title: title, Status: StatusOpen}, CreatedAt: time.Now()}
 		tasks[t.ID] = t
 		added = append(added, t)
 	}
@@ -156,7 +155,7 @@ func ExportTasks(r *http.Request) (tether.File, error) {
 	var b strings.Builder
 	b.WriteString("id,title,status\n")
 	for _, t := range all {
-		b.WriteString(t.ID + "," + strconv.Quote(t.Title) + "," + string(t.Status) + "\n")
+		b.WriteString(strconv.Itoa(t.ID) + "," + strconv.Quote(t.Title) + "," + string(t.Status) + "\n")
 	}
 	return tether.File{Name: "tasks.csv", ContentType: "text/csv", Body: strings.NewReader(b.String())}, nil
 }
@@ -166,37 +165,42 @@ func main() {
 	log.Fatal(http.ListenAndServe(":8080", routes()))
 }
 
-// routes is the whole API: the standard library's router, with one
-// tether.Route per endpoint. Middleware would wrap the mux or a handler.
-func routes() http.Handler {
-	mux := http.NewServeMux()
-	mux.Handle(tether.Route("GET /v1/tasks", ListTasks))
-	mux.Handle(tether.Route("GET /v1/tasks/{id}", GetTask))
-	mux.Handle(tether.Route("POST /v1/tasks", CreateTask))
-	mux.Handle(tether.Route("PUT /v1/tasks/{id}", UpdateTask))
-	mux.Handle(tether.Route("DELETE /v1/tasks/{id}", DeleteTask))
-	mux.Handle(tether.Route("GET /v1/tasks.csv", ExportTasks))
-	mux.Handle(tether.Route("POST /v1/tasks/import", ImportTasks))
-	// requestID goes outside, so a response to a panic carries the id too.
-	return requestID(recoverPanics(mux))
+// APIKey is the key a client sends in the X-API-Key header to change
+// tasks. This example knows one key, demoKey; reading needs none.
+var APIKey = tether.Auth{Header: "X-API-Key", Check: checkKey}
+
+const demoKey = "demo"
+
+// ErrNoKey answers a change without a valid key. The client recognises it
+// with isNoKey.
+var ErrNoKey = tether.Problem{Status: http.StatusUnauthorized, Code: "noKey", Message: "Send a valid key in X-API-Key."}
+
+func checkKey(r *http.Request, _ []string) (*http.Request, error) {
+	if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-API-Key")), []byte(demoKey)) != 1 {
+		return nil, ErrNoKey
+	}
+	return r, nil
 }
 
-// recoverPanics answers a panic like any other unexpected error: a 500
-// problem document for the client, the cause and stack in the log.
-func recoverPanics(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer func() {
-			p := recover()
-			if p == nil {
-				return
-			}
-			if p == http.ErrAbortHandler {
-				panic(p) // net/http's way to abort a response on purpose
-			}
-			tether.WriteError(w, r, fmt.Errorf("panic: %v\n%s", p, debug.Stack()))
-		}()
-		next.ServeHTTP(w, r)
-	})
+// Who may call a route: anyone, or a client with the key.
+var (
+	open   = tether.Options{Public: true}
+	editor = tether.Options{Auth: APIKey}
+)
+
+// routes is the whole API: the standard library's router, with one
+// tether.Route per endpoint. tether answers a panic in a handler itself;
+// other middleware wraps the mux.
+func routes() http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle(tether.Route("GET /v1/tasks", ListTasks, open))
+	mux.Handle(tether.Route("GET /v1/tasks/{id}", GetTask, open))
+	mux.Handle(tether.Route("POST /v1/tasks", CreateTask, editor))
+	mux.Handle(tether.Route("PUT /v1/tasks/{id}", UpdateTask, editor))
+	mux.Handle(tether.Route("DELETE /v1/tasks/{id}", DeleteTask, editor))
+	mux.Handle(tether.Route("GET /v1/tasks.csv", ExportTasks, open))
+	mux.Handle(tether.Route("POST /v1/tasks/import", ImportTasks, editor))
+	return requestID(mux)
 }
 
 // requestID marks every response, so an error page can name the request.
@@ -220,14 +224,10 @@ func init() {
 	})
 }
 
-// find returns the task named by the path. PathValue parses the id; a value
-// that is not a number answers 404 before the store is asked.
-func find(r *http.Request) (Task, error) {
-	id, err := tether.PathValue[int](r, "id")
-	if err != nil {
-		return Task{}, err
-	}
-	t, ok := tasks[strconv.Itoa(id)]
+// find returns a task. An id in the path that is not a number never gets
+// here: tether answers it with 404 before the handler runs.
+func find(id int) (Task, error) {
+	t, ok := tasks[id]
 	if !ok {
 		return Task{}, errNotFound
 	}
@@ -243,7 +243,7 @@ func hasAll(have, want []string) bool {
 	return true
 }
 
-func taken(title, except string) bool {
+func taken(title string, except int) bool {
 	for id, t := range tasks {
 		if id != except && strings.EqualFold(t.Title, title) {
 			return true

@@ -48,13 +48,13 @@ func TestPutNeedsEveryField(t *testing.T) {
 		{`{"by": "x", "name": "a", "lines": [{"sku": "1"}], "labels": {"de": {"note": "n"}}, "ref": null}`, "labels.de.sku:missing lines.0.note:missing"},
 	}
 	for _, c := range cases {
-		rec := serve(t, "PUT /orders/{id}", replaceOrder, httptest.NewRequest("PUT", "/orders/1", strings.NewReader(c.body)))
+		rec := serve(t, "PUT /orders", replaceOrder, httptest.NewRequest("PUT", "/orders", strings.NewReader(c.body)))
 		if got := fieldRules(t, rec); rec.Code != 422 || got != c.want {
 			t.Errorf("%s: status %d, errors %s, want %s", c.body, rec.Code, got, c.want)
 		}
 	}
 	full := `{"by": "x", "name": "a", "lines": [], "labels": {}, "ref": {"sku": "1", "note": ""}}`
-	if rec := serve(t, "PUT /orders/{id}", replaceOrder, httptest.NewRequest("PUT", "/orders/1", strings.NewReader(full))); rec.Code != 204 {
+	if rec := serve(t, "PUT /orders", replaceOrder, httptest.NewRequest("PUT", "/orders", strings.NewReader(full))); rec.Code != 204 {
 		t.Errorf("complete body: status %d, body %s", rec.Code, rec.Body)
 	}
 	// POST and PATCH still take what they get.

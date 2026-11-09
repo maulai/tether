@@ -9,6 +9,7 @@ import (
 	"go/token"
 	"go/types"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -32,16 +33,46 @@ type program struct {
 	roots    map[*types.Package]*packages.Package
 	funcDocs map[*types.Func]string
 	typeDocs map[*types.TypeName]string
-	varDocs  map[*types.Var]string
+	varDocs  map[*types.Var]string // fields and package variables
 	varInits map[*types.Var]ast.Expr
+	initVars map[ast.Expr]*types.Var // the variable a package level value initialises
 	infoOf   map[*ast.File]*types.Info
 
 	routes    []*route
 	validates []validateCall
-	patterns  map[string]pattern // by rule name
+	patterns  map[string]pattern         // by rule name, a Format's included
+	formats   map[*types.TypeName]string // the rule name of each Format
 	checks    []string
-	messages  map[string]string // nil: no Messages call
+	messages  map[string]string      // nil: no Messages call
+	problems  map[string]*problemDef // by code
+	auths     map[*types.Var]*authDef
 	errs      []string
+}
+
+// problemDef is one tether.Problem literal with a code.
+type problemDef struct {
+	code    string
+	status  int
+	message string // empty when it is not a constant
+	doc     string
+	pos     token.Pos
+}
+
+// authDef is one tether.Auth, declared as a package variable.
+type authDef struct {
+	name   string // the variable's name, the scheme's name in OpenAPI
+	doc    string
+	cookie string
+	header string
+	bearer bool
+	pos    token.Pos
+}
+
+// access is what a route's Options say about who may call it.
+type access struct {
+	auth   *authDef // nil without one
+	scopes []string
+	public bool
 }
 
 // validateCall is one tether.Validate call: the type of its argument and
@@ -71,11 +102,14 @@ type route struct {
 	upload  bool
 	file    bool
 	query   bool
+	access  access
 }
 
 type pathParam struct {
 	name     string
 	wildcard bool
+	typ      types.Type // the handler's argument
+	pos      token.Pos
 }
 
 func (p *program) errorf(pos token.Pos, format string, args ...any) {
@@ -115,8 +149,12 @@ func load(dir string, patterns []string) (*program, error) {
 		typeDocs: map[*types.TypeName]string{},
 		varDocs:  map[*types.Var]string{},
 		varInits: map[*types.Var]ast.Expr{},
+		initVars: map[ast.Expr]*types.Var{},
 		infoOf:   map[*ast.File]*types.Info{},
 		patterns: map[string]pattern{},
+		formats:  map[*types.TypeName]string{},
+		problems: map[string]*problemDef{},
+		auths:    map[*types.Var]*authDef{},
 	}
 	var loadErrs []string
 	for _, pkg := range pkgs {
@@ -180,9 +218,19 @@ func (p *program) index(info *types.Info, f *ast.File) {
 						p.typeDocs[tn] = strings.TrimSpace(doc.Text())
 					}
 				case *ast.ValueSpec:
+					doc := s.Doc
+					if doc == nil && len(d.Specs) == 1 {
+						doc = d.Doc
+					}
 					for i, name := range s.Names {
-						if v, ok := info.Defs[name].(*types.Var); ok && i < len(s.Values) {
+						v, ok := info.Defs[name].(*types.Var)
+						if !ok {
+							continue
+						}
+						p.varDocs[v] = strings.TrimSpace(doc.Text())
+						if i < len(s.Values) {
 							p.varInits[v] = s.Values[i]
+							p.initVars[ast.Unparen(s.Values[i])] = v
 						}
 					}
 				}
@@ -212,6 +260,10 @@ func (p *program) index(info *types.Info, f *ast.File) {
 // scan finds the calls into tether that the generator must read.
 func (p *program) scan(pkg *types.Package, info *types.Info, f *ast.File) {
 	ast.Inspect(f, func(n ast.Node) bool {
+		if lit, ok := n.(*ast.CompositeLit); ok && isTether(info.TypeOf(lit), "Problem") {
+			p.problem(info, lit)
+			return true
+		}
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
@@ -233,6 +285,8 @@ func (p *program) scan(pkg *types.Package, info *types.Info, f *ast.File) {
 				}
 				p.patterns[name] = pattern{expr: expr, message: msg}
 			}
+		case "Format":
+			p.format(info, call)
 		case "Check":
 			// The browser never reports a Check, so its message stays on the
 			// server; it is read only to catch what the server rejects.
@@ -334,9 +388,9 @@ func (p *program) route(info *types.Info, call *ast.CallExpr) {
 	sig := r.handler.Type().(*types.Signature)
 	params, results := sig.Params(), sig.Results()
 	shapeErr := func() {
-		p.errorf(call.Args[1].Pos(), "%s must have the shape func(*http.Request[, In]) ([Out, ]error)", r.handler.Name())
+		p.errorf(call.Args[1].Pos(), "%s must have the shape %s", r.handler.Name(), shape)
 	}
-	if params.Len() < 1 || params.Len() > 2 || sig.Variadic() || types.TypeString(params.At(0).Type(), nil) != "*net/http.Request" {
+	if params.Len() < 1 || sig.Variadic() || types.TypeString(params.At(0).Type(), nil) != "*net/http.Request" {
 		shapeErr()
 		return
 	}
@@ -350,8 +404,25 @@ func (p *program) route(info *types.Info, call *ast.CallExpr) {
 		shapeErr()
 		return
 	}
-	if params.Len() == 2 {
-		r.in = params.At(1).Type()
+	extra := params.Len() - 1 - len(r.params)
+	if extra < 0 || extra > 1 {
+		p.errorf(call.Args[1].Pos(), "%s: the pattern has %d path parameter(s), %s; the handler takes them after r, in order, then its input: %s",
+			r.handler.Name(), len(r.params), paramList(r.params), shape)
+		return
+	}
+	for i := range r.params {
+		pp := &r.params[i]
+		v := params.At(1 + i)
+		pp.typ, pp.pos = v.Type(), v.Pos()
+		if v.Name() != "" && v.Name() != "_" && v.Name() != pp.name {
+			p.errorf(v.Pos(), "%s: parameter %s stands where the pattern has {%s}; name it %s, or _ when the handler does not need it", r.handler.Name(), v.Name(), pp.name, pp.name)
+		}
+	}
+	if len(call.Args) > 2 {
+		r.access = p.options(info, call)
+	}
+	if extra == 1 {
+		r.in = params.At(params.Len() - 1).Type()
 		switch {
 		case isTether(r.in, "Upload"):
 			if r.query {
@@ -367,6 +438,262 @@ func (p *program) route(info *types.Info, call *ast.CallExpr) {
 		}
 	}
 	p.routes = append(p.routes, r)
+}
+
+const shape = "func(r *http.Request[, path parameters][, in In]) ([Out, ]error)"
+
+func paramList(params []pathParam) string {
+	if len(params) == 0 {
+		return "none"
+	}
+	names := make([]string, len(params))
+	for i, pp := range params {
+		names[i] = "{" + pp.name + "}"
+	}
+	return strings.Join(names, ", ")
+}
+
+// options reads the Options of a route: a tether.Options literal in the
+// call or a package variable initialised with one.
+func (p *program) options(info *types.Info, call *ast.CallExpr) access {
+	var a access
+	if len(call.Args) > 3 || call.Ellipsis.IsValid() {
+		p.errorf(call.Args[2].Pos(), "pass one tether.Options to Route, directly")
+		return a
+	}
+	lit, linfo := p.literal(info, call.Args[2], "Options")
+	if lit == nil {
+		p.errorf(call.Args[2].Pos(), "the Options must be a tether.Options literal or a package variable initialised with one, so tether can read them")
+		return a
+	}
+	for _, el := range lit.Elts {
+		kv, ok := el.(*ast.KeyValueExpr)
+		key, _ := kv.Key.(*ast.Ident)
+		if !ok || key == nil {
+			p.errorf(el.Pos(), "name the fields of tether.Options")
+			continue
+		}
+		switch key.Name {
+		case "Auth":
+			a.auth = p.auth(linfo, kv.Value)
+		case "Scopes":
+			a.scopes = p.stringList(linfo, kv.Value)
+		case "Public":
+			tv := linfo.Types[kv.Value]
+			if tv.Value == nil || tv.Value.Kind() != constant.Bool {
+				p.errorf(kv.Value.Pos(), "Public must be a constant, so tether can read it")
+				continue
+			}
+			a.public = constant.BoolVal(tv.Value)
+		}
+	}
+	switch {
+	case a.public && a.auth != nil:
+		p.errorf(lit.Pos(), "a route is either Public or has an Auth, not both")
+	case len(a.scopes) > 0 && a.auth == nil:
+		p.errorf(lit.Pos(), "Scopes need an Auth that checks them")
+	}
+	return a
+}
+
+// literal finds the composite literal of the tether type name that e is or
+// that the package variable e names was initialised with, and the type
+// information of the package it is written in.
+func (p *program) literal(info *types.Info, e ast.Expr, name string) (*ast.CompositeLit, *types.Info) {
+	e = ast.Unparen(e)
+	if lit, ok := e.(*ast.CompositeLit); ok && isTether(info.TypeOf(lit), name) {
+		return lit, info
+	}
+	v := p.varOf(info, e)
+	if v == nil {
+		return nil, nil
+	}
+	lit, ok := ast.Unparen(p.varInits[v]).(*ast.CompositeLit)
+	vinfo := p.infoFor(v)
+	if !ok || vinfo == nil || !isTether(vinfo.TypeOf(lit), name) {
+		return nil, nil
+	}
+	return lit, vinfo
+}
+
+func (p *program) varOf(info *types.Info, e ast.Expr) *types.Var {
+	var id *ast.Ident
+	switch x := ast.Unparen(e).(type) {
+	case *ast.Ident:
+		id = x
+	case *ast.SelectorExpr:
+		id = x.Sel
+	default:
+		return nil
+	}
+	v, _ := info.Uses[id].(*types.Var)
+	if v == nil || v.Pkg() == nil || v.Parent() != v.Pkg().Scope() {
+		return nil // not a package variable
+	}
+	return v
+}
+
+// auth reads the Auth an Options names. It must be a package variable: its
+// name is the scheme's name in OpenAPI.
+func (p *program) auth(info *types.Info, e ast.Expr) *authDef {
+	v := p.varOf(info, e)
+	if v == nil {
+		p.errorf(e.Pos(), "declare the Auth as a package variable and name it here; its name names it in OpenAPI")
+		return nil
+	}
+	if a, ok := p.auths[v]; ok {
+		return a
+	}
+	lit, linfo := p.literal(info, e, "Auth")
+	if lit == nil {
+		p.errorf(e.Pos(), "%s must be initialised with a tether.Auth literal, so tether can read it", v.Name())
+		return nil
+	}
+	a := &authDef{name: v.Name(), doc: p.varDocs[v], pos: v.Pos()}
+	p.auths[v] = a
+	carriers := 0
+	for _, el := range lit.Elts {
+		kv, ok := el.(*ast.KeyValueExpr)
+		key, _ := kv.Key.(*ast.Ident)
+		if !ok || key == nil {
+			p.errorf(el.Pos(), "name the fields of tether.Auth")
+			continue
+		}
+		switch key.Name {
+		case "Cookie", "Header":
+			s, ok := p.constString(linfo, kv.Value)
+			if ok && s != "" {
+				carriers++
+				if key.Name == "Cookie" {
+					a.cookie = s
+				} else {
+					a.header = s
+				}
+			}
+		case "Bearer":
+			tv := linfo.Types[kv.Value]
+			if tv.Value == nil || tv.Value.Kind() != constant.Bool {
+				p.errorf(kv.Value.Pos(), "Bearer must be a constant, so tether can read it")
+			} else if constant.BoolVal(tv.Value) {
+				carriers++
+				a.bearer = true
+			}
+		}
+	}
+	if carriers != 1 {
+		p.errorf(lit.Pos(), "%s: an Auth names exactly one of Cookie, Header and Bearer", v.Name())
+	}
+	return a
+}
+
+func (p *program) stringList(info *types.Info, e ast.Expr) []string {
+	lit, ok := ast.Unparen(e).(*ast.CompositeLit)
+	if !ok {
+		if id, isIdent := ast.Unparen(e).(*ast.Ident); isIdent && id.Name == "nil" {
+			return nil
+		}
+		p.errorf(e.Pos(), "Scopes must be a []string literal, so tether can read them")
+		return nil
+	}
+	var out []string
+	for _, el := range lit.Elts {
+		if s, ok := p.constString(info, el); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+var problemCode = regexp.MustCompile(`^[a-z][A-Za-z0-9]*$`)
+
+// problem reads a tether.Problem literal. One with a code is a case the
+// client recognises; it is declared once.
+func (p *program) problem(info *types.Info, lit *ast.CompositeLit) {
+	fields := map[string]ast.Expr{}
+	for i, el := range lit.Elts {
+		if kv, ok := el.(*ast.KeyValueExpr); ok {
+			if key, ok := kv.Key.(*ast.Ident); ok {
+				fields[key.Name] = kv.Value
+			}
+		} else if i < 3 {
+			fields[[]string{"Status", "Code", "Message"}[i]] = el
+		}
+	}
+	codeExpr, ok := fields["Code"]
+	if !ok {
+		return // a Problem without a code is a Fail
+	}
+	code, ok := p.constString(info, codeExpr)
+	if !ok || code == "" {
+		return
+	}
+	d := &problemDef{code: code, pos: lit.Pos()}
+	if v := p.initVars[lit]; v != nil {
+		d.doc = p.varDocs[v]
+	}
+	if !problemCode.MatchString(code) {
+		p.errorf(codeExpr.Pos(), "problem code %q must be lowerCamel, like mfaRequired, so the client can name a function after it", code)
+		return
+	}
+	tv := info.Types[fields["Status"]]
+	if fields["Status"] == nil || tv.Value == nil || tv.Value.Kind() != constant.Int {
+		p.errorf(lit.Pos(), "problem %s needs a constant Status, so tether can read it", code)
+		return
+	}
+	status, _ := constant.Int64Val(tv.Value)
+	if status < 400 || status > 599 {
+		p.errorf(fields["Status"].Pos(), "problem %s: status %d is not an error status", code, status)
+		return
+	}
+	d.status = int(status)
+	if m := fields["Message"]; m != nil {
+		if tv := info.Types[m]; tv.Value != nil && tv.Value.Kind() == constant.String {
+			d.message = constant.StringVal(tv.Value)
+		}
+	}
+	if prev, dup := p.problems[code]; dup {
+		p.errorf(lit.Pos(), "problem code %s is declared twice, also at %s; declare it once and use With for another text", code, p.fset.Position(prev.pos))
+		return
+	}
+	p.problems[code] = d
+}
+
+// format reads a tether.Format call: a rule like a Pattern, bound to the
+// type of its type argument.
+func (p *program) format(info *types.Info, call *ast.CallExpr) {
+	var id *ast.Ident
+	if ix, ok := ast.Unparen(call.Fun).(*ast.IndexExpr); ok {
+		switch x := ix.X.(type) {
+		case *ast.SelectorExpr:
+			id = x.Sel
+		case *ast.Ident:
+			id = x
+		}
+	}
+	inst, ok := info.Instances[id]
+	if id == nil || !ok || inst.TypeArgs.Len() != 1 {
+		p.errorf(call.Pos(), "write the type of a Format explicitly, tether.Format[T]")
+		return
+	}
+	named, ok := types.Unalias(inst.TypeArgs.At(0)).(*types.Named)
+	if !ok {
+		p.errorf(call.Pos(), "a Format needs a named type with UnmarshalText, not %s", inst.TypeArgs.At(0))
+		return
+	}
+	name, ok1 := p.constString(info, call.Args[0])
+	expr, ok2 := p.constString(info, call.Args[1])
+	msg, ok3 := p.ruleMessage(info, call.Args[2], name)
+	if !ok1 || !ok2 || !ok3 {
+		return
+	}
+	if _, dup := p.patterns[name]; dup {
+		p.errorf(call.Pos(), "rule %s registered twice", name)
+	}
+	if prev, dup := p.formats[named.Obj()]; dup {
+		p.errorf(call.Pos(), "%s has two formats, %s and %s", named.Obj().Name(), prev, name)
+	}
+	p.patterns[name] = pattern{expr: expr, message: msg}
+	p.formats[named.Obj()] = name
 }
 
 func isTether(t types.Type, name string) bool {

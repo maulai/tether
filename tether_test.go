@@ -34,8 +34,8 @@ func createTask(r *http.Request, in taskInput) (task, error) {
 	return task{ID: "1", Title: in.Title}, nil
 }
 
-func getTask(r *http.Request) (task, error) {
-	if r.PathValue("id") != "1" {
+func getTask(r *http.Request, id int) (task, error) {
+	if id != 1 {
 		return task{}, Fail(http.StatusNotFound, "no such task")
 	}
 	return task{ID: "1"}, nil
@@ -45,7 +45,7 @@ func listTasks(r *http.Request, f taskFilter) ([]task, error) {
 	return []task{{ID: f.Status}}, nil
 }
 
-func deleteTask(r *http.Request) error { return nil }
+func deleteTask(r *http.Request, id string) error { return nil }
 
 func serve(t *testing.T, pattern string, h any, req *http.Request) *httptest.ResponseRecorder {
 	t.Helper()
@@ -180,6 +180,8 @@ func TestNoContent(t *testing.T) {
 	}
 }
 
+// statusError has the method HTTPStatus that tether once read; it is an
+// error like any other now, and MapErrors is the place to translate it.
 type statusError struct{ status int }
 
 func (e statusError) Error() string   { return "status error" }
@@ -195,8 +197,9 @@ func TestHandlerErrors(t *testing.T) {
 		{FieldError("title", "Taken."), 422, "Please check the marked fields.", 1},
 		{errors.Join(FieldError("a", "x"), FieldError("b", "y")), 422, "Please check the marked fields.", 2},
 		{Fail(http.StatusConflict, "Already issued."), 409, "Already issued.", 0},
-		{statusError{403}, 403, "status error", 0},
-		{statusError{503}, 503, "Something went wrong.", 0},
+		{Fail(http.StatusServiceUnavailable, "Back at noon."), 503, "Back at noon.", 0},
+		{Fail(200, "Not an error status."), 500, "Something went wrong.", 0},
+		{statusError{403}, 500, "Something went wrong.", 0},
 		{errors.New("pq: connection refused"), 500, "Something went wrong.", 0},
 	}
 	for _, c := range cases {

@@ -71,8 +71,8 @@ func (d *decoder) value(path string, raw any, v reflect.Value, vp *valuePlan, as
 	if raw == nil {
 		return // JSON null leaves the zero value, as with encoding/json
 	}
-	if s, ok := raw.(string); ok && s == "" && (vp.kind.Number() || vp.kind == vtag.Time) {
-		return // forms send "" for an empty number or date input
+	if s, ok := raw.(string); ok && s == "" && (vp.kind.Number() || vp.kind == vtag.Time || hasFormat(vp.typ)) {
+		return // forms send "" for an empty number, date or select
 	}
 	if vp.pointer {
 		if v.IsNil() {
@@ -111,9 +111,7 @@ func (d *decoder) value(path string, raw any, v reflect.Value, vp *valuePlan, as
 			d.fail(path, "type")
 			return
 		}
-		if err := v.Addr().Interface().(encoding.TextUnmarshaler).UnmarshalText([]byte(s)); err != nil {
-			d.fail(path, "type")
-		}
+		d.text(path, s, v)
 		return
 	}
 
@@ -225,6 +223,24 @@ func (d *decoder) value(path string, raw any, v reflect.Value, vp *valuePlan, as
 	default:
 		d.fail(path, "type")
 	}
+}
+
+// text reads s into a type with UnmarshalText. A registered Format is
+// checked first, so the client gets its message, the same the browser
+// shows, instead of a bare "type".
+func (d *decoder) text(path, s string, v reflect.Value) {
+	if f, ok := formatFor(v.Type()); ok && !f.re.MatchString(s) {
+		d.fail(path, f.name)
+		return
+	}
+	if err := v.Addr().Interface().(encoding.TextUnmarshaler).UnmarshalText([]byte(s)); err != nil {
+		d.fail(path, "type")
+	}
+}
+
+func hasFormat(t reflect.Type) bool {
+	_, ok := formatFor(t)
+	return ok
 }
 
 // withMissing adds to the sorted keys of obj the fields it lacks, so they are
@@ -371,9 +387,7 @@ func (d *decoder) scalar(path, s string, v reflect.Value, vp *valuePlan) {
 		v.Set(reflect.ValueOf(tm))
 		return
 	case reflect.PointerTo(t).Implements(textUnmarshaler):
-		if err := v.Addr().Interface().(encoding.TextUnmarshaler).UnmarshalText([]byte(s)); err != nil {
-			d.fail(path, "type")
-		}
+		d.text(path, s, v)
 		return
 	}
 	switch vp.kind {

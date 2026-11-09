@@ -21,13 +21,18 @@ type TaskInput struct {
 // CreateTask adds a task.
 func CreateTask(r *http.Request, in TaskInput) (Task, error) { … }
 
+// UpdateTask replaces a task.
+func UpdateTask(r *http.Request, id int, in TaskInput) (Task, error) { … }
+
 mux.Handle(tether.Route("POST /v1/tasks", CreateTask))
+mux.Handle(tether.Route("PUT /v1/tasks/{id}", UpdateTask))
 ```
 
 ```ts
 import { createTask, taskInputSchema } from "./api";
 
 const task = await createTask({ title: "Write spec", status: "open" });
+await updateTask(task.id, { ...task, status: "done" }); // id: number
 ```
 
 tether has three parts, all in one Go module, `github.com/maulai/tether`:
@@ -59,39 +64,47 @@ tether has three parts, all in one Go module, `github.com/maulai/tether`:
 ### 3.1 Routes
 
 ```go
-func Route(pattern string, handler any) (string, http.Handler)
+func Route(pattern string, handler any, opts ...Options) (string, http.Handler)
 ```
 
 `pattern` is a `net/http.ServeMux` pattern with a method, for example
 `"PUT /v1/tasks/{id}"`. It must be a string constant, because the generator
 reads it from the source. Supported methods: `GET`, `POST`, `PUT`, `PATCH`,
-`DELETE`.
+`DELETE`. `opts`, at most one, says who may call the route (3.9).
 
-The return values fit `mux.Handle` directly. Middleware wraps the handler as
-usual:
+The return values fit `mux.Handle` directly. Middleware wraps the mux or a
+handler as usual:
 
 ```go
 mux.Handle(tether.Route("GET /v1/tasks", ListTasks))
-
-pattern, h := tether.Route("DELETE /v1/tasks/{id}", DeleteTask)
-mux.Handle(pattern, requireAdmin(h))
+http.ListenAndServe(":8080", requestID(mux))
 ```
 
 Other routers work if they set path values through `Request.SetPathValue`.
 
 ### 3.2 Handlers
 
-A handler is a **named function or method** with one of four shapes:
+A handler is a **named function or method**. It takes `r`, then one
+argument per parameter of the pattern, in the pattern's order, then
+optionally its input, and returns an output and an error, or only an
+error:
 
 ```go
-func(r *http.Request) (Out, error)
-func(r *http.Request, in In) (Out, error)
-func(r *http.Request) error
-func(r *http.Request, in In) error
+func(r *http.Request, <path parameters…>[, in In]) ([Out, ]error)
+```
+
+```go
+func ListTasks(r *http.Request) ([]Task, error)                      // GET /v1/tasks
+func CreateTask(r *http.Request, in TaskInput) (Task, error)         // POST /v1/tasks
+func GetTask(r *http.Request, id int) (Task, error)                  // GET /v1/tasks/{id}
+func UpdateTask(r *http.Request, id int, in TaskInput) (Task, error) // PUT /v1/tasks/{id}
+func DeleteTask(r *http.Request, org string, id int) error           // DELETE /v1/orgs/{org}/tasks/{id}
 ```
 
 `Route` panics at startup for any other shape. `In` must be a named,
-non-generic struct type (or `tether.Upload`).
+non-generic struct type (or `tether.Upload`). A pattern with parameters
+always has them in the handler; one the handler does not need is named
+`_`.
 
 - **Name:** the TypeScript function is named after the handler, with its
   leading capitals lowercased (`CreateTask` becomes `createTask`, `HTTPGet`
@@ -99,9 +112,8 @@ non-generic struct type (or `tether.Upload`).
   reserved word in TypeScript (`Delete`), are an error that names the place.
 - **Description:** the handler's doc comment becomes the operation's
   description in OpenAPI and the doc comment of the TypeScript function.
-- **Path parameters:** read with `r.PathValue("id")`, or parsed with
-  `tether.PathValue[T](r, "id")` (3.8). The generator takes their names
-  from the pattern; in TypeScript they are `string` arguments.
+- **Path parameters:** see 3.8. In TypeScript they are arguments of
+  their types, before the input.
 
 ### 3.3 Input
 
@@ -128,8 +140,8 @@ Body rules:
   value the handler keeps when it is not sent; the entries of a map are
   data, not fields, and are not required. `POST` and `PATCH` take what they
   get.
-- For a number or a `time.Time`, `""` means "not given": forms send it for
-  an empty input.
+- For a number, a `time.Time` or a type with a Format (4.2), `""` means
+  "not given": forms send it for an empty input or select.
 - A `time.Time` accepts RFC 3339 and a plain date (`2026-11-01`, midnight
   UTC), which is what a date input yields.
 - A JSON body is limited to `tether.MaxBodyBytes` (default 1 MiB). Real
@@ -237,6 +249,10 @@ Errors are written as RFC 9457 problem details
 }
 ```
 
+Besides the members of RFC 9457, a problem may carry `code`, the case of a
+`Problem` (below), and a 500 carries `instance`, a `urn:uuid:` that the
+server's log names next to the cause.
+
 `field` is the path in the JSON input, with dots and numeric indices:
 `items.2.sku`, `labels.de`. This is the notation form libraries such as
 react-hook-form use, so it can be passed to them directly.
@@ -246,23 +262,54 @@ Handlers create errors with:
 ```go
 func FieldError(field, message string) error // 422, one field
 func Fail(status int, message string) error  // any status, no field
+
+type Problem struct {
+	Status  int
+	Code    string
+	Message string
+}
 ```
 
 Several field errors are combined with the standard `errors.Join`.
+
+**Problems.** A `Problem` with a `Code` is a case the client tells apart
+from others with the same status, to react to it: a session that waits for
+its second factor, an archive that is suspended. It is declared once, as a
+package variable, and returned as it is:
+
+```go
+// ErrMFARequired: the session waits for the second factor.
+var ErrMFARequired = tether.Problem{Status: http.StatusForbidden, Code: "mfaRequired", Message: "Two-factor sign-in required."}
+
+return ErrMFARequired
+return ErrSuspended.With("This archive is suspended: " + reason) // another text, the same case
+```
+
+- `Code` is lowerCamel, `Status` a constant from 400 to 599; the generator
+  reads every `Problem` literal with a code, reports a code declared twice
+  and gives the client a function per code (6.3).
+- `errors.Is(err, ErrMFARequired)` holds for the problem and for every
+  `With` of it, so Go code and tests recognise the case too.
+- `Fail(status, message)` is a `Problem` without a code: for a text the
+  client shows rather than reacts to, such as most conflicts.
 
 | Error | Status | `detail` |
 |---|---|---|
 | validation or `FieldError` | 422 | message `invalid` |
 | body is not valid JSON | 400 | message `malformed` |
 | body too large | 413 | message `tooLarge` |
-| `Fail(status, message)` | `status` | `message` |
-| error with method `HTTPStatus() int` below 500 | that status | `err.Error()` |
-| any other error, or status 500 and above | 500 or that status | message `internal`; the error is logged with `log/slog` and not sent |
+| `Problem` or `Fail(status, message)`, status 400 to 599 | `status`, and `code` | `message` |
+| a panic in the handler or in a check (3.9) | 500 | message `internal`; the panic and its stack are logged |
+| any other error, a `Problem` with another status included | 500 | message `internal`; the error is logged with `log/slog` and not sent |
 
-A project needs no error type of its own: `FieldError` and `Fail` cover
+A project needs no error type of its own: `FieldError` and `Problem` cover
 every status (use the `net/http` constants), and any other error is answered
-with 500 and logged, which keeps technical causes out of responses.
-`HTTPStatus() int` exists only for code that must not import tether.
+with 500 and logged, which keeps technical causes out of responses. Errors
+of code that must not import tether go through `MapErrors`.
+
+**Instance.** Every 500 gets a new `instance`, `urn:uuid:` and a random
+UUID. The log line with the cause names the same instance, so a person who
+reports the error page names the entry that explains it.
 
 **Mapping errors.** Errors of packages a project cannot change, such as a
 database driver's "no rows", are translated in one place instead of at
@@ -290,10 +337,15 @@ format and gets the message, and a 500 is logged, not sent. It keeps the
 headers already set on `w` and must be called before anything is written.
 A nil error is a mistake in the caller and answers 500.
 
-tether does not recover panics in `Route`: `net/http` already does, and one
-recovery middleware around the mux that calls `WriteError` also covers the
-other middleware. It must re-panic `http.ErrAbortHandler`, which aborts a
-response on purpose.
+**Panics.** `Route` recovers a panic in the handler or in its check and
+answers 500 with an instance, the panic and its stack in the log: without
+this, `net/http` breaks the connection off, and the client reports an
+unreachable server instead of a failed request. tether writes every byte
+of the response itself, so it knows when it is too late: a panic once the
+response has begun, while a file streams, is logged and aborts the
+response. `http.ErrAbortHandler`, which aborts a response on purpose,
+passes on. Middleware around the mux recovers its own panics if it needs
+to.
 
 ### 3.6 Enums
 
@@ -308,7 +360,8 @@ in source order. Anything else is a plain string.
 
 The server needs the values at run time, and Go cannot list constants at
 run time. The generator therefore writes `tether_gen.go` into every
-**handler package** whose handlers take enums in their input:
+**handler package** whose handlers take enums in their input or their path
+parameters:
 
 ```go
 // Code generated by tether; DO NOT EDIT.
@@ -368,19 +421,99 @@ func SetCookie(r *http.Request, c *http.Cookie) error
 Sessions themselves stay out of scope (9); these two functions are what a
 project needs to build them.
 
-### 3.8 Typed path parameters
+### 3.8 Path parameters
+
+A handler takes the parameters of its pattern as arguments after `r`, in
+the pattern's order, each parsed into its type before the handler runs:
 
 ```go
-func PathValue[T any](r *http.Request, name string) (T, error)
+// GetTask returns one task.
+func GetTask(r *http.Request, id uuid.UUID) (Task, error) { … }
+
+mux.Handle(tether.Route("GET /v1/tasks/{id}", GetTask))
 ```
 
-parses a path parameter into `T`: a string type, an enum (only its values
-are accepted), a number, a boolean, `time.Time`, or a type with
-`UnmarshalText` such as `uuid.UUID`. A value that does not parse returns an
-error that answers 404 with message `notFound`: a malformed address names
-no resource. The handler returns it as it is. `PathValue` panics for a `T`
-it cannot parse into and for a name the route's pattern does not have; both
-are programming errors.
+- A parameter is a string type, an enum (only its values are accepted), a
+  number, a boolean, `time.Time`, or a type with `UnmarshalText` such as
+  `uuid.UUID`, which needs a Format (4.2).
+- A value that does not parse answers 404 with message `notFound`: a
+  malformed address names no resource. The handler never sees it.
+- `{name...}`, the rest of the path, is a string; `{$}` is no parameter.
+- The generator checks the names: the argument for `{id}` is named `id`,
+  or `_`. `Route` checks the number and the types, and panics at start-up
+  for a mismatch.
+- A query parameter must not have the name of a path parameter of its
+  route: both would sit in the address. The generator reports it.
+- Middleware reads a path value with `r.PathValue` as usual.
+
+### 3.9 Access
+
+Who may call a route is part of the API: it belongs in the OpenAPI
+document, and declaring it apart from its check would let the two drift.
+A project declares each way a caller proves who it is once, with its
+check, and each route says which one it needs:
+
+```go
+// Session is the sign-in of the browser: a session cookie and a CSRF header.
+var Session = tether.Auth{Cookie: "session_token", Check: checkSession}
+
+// APIKey is the key of another system.
+var APIKey = tether.Auth{Bearer: true, Check: checkKey}
+
+var (
+	open     = tether.Options{Public: true}
+	signedIn = tether.Options{Auth: Session}
+	admin    = tether.Options{Auth: Session, Scopes: []string{"admin"}}
+	ingest   = tether.Options{Auth: APIKey, Scopes: []string{"documents:write"}}
+)
+
+mux.Handle(tether.Route("POST /v1/login", Login, open))
+mux.Handle(tether.Route("GET /v1/me", GetMe, signedIn))
+mux.Handle(tether.Route("POST /v1/categories", CreateCategory, admin))
+mux.Handle(tether.Route("POST /v1/ingest/documents", CreateIngestDocuments, ingest))
+```
+
+```go
+type Auth struct {
+	Cookie string // the credential is the cookie of this name
+	Header string // … the header of this name
+	Bearer bool   // … Authorization: Bearer
+	Check  func(r *http.Request, scopes []string) (*http.Request, error)
+}
+
+type Options struct {
+	Auth   Auth
+	Scopes []string
+	Public bool
+}
+```
+
+- **The check is the project's.** tether knows no session and no key; it
+  calls `Check` for every request to the route, with the route's scopes,
+  before the path parameters and the input are read, so a caller without
+  credentials learns nothing about them. `Check` returns the request with
+  what the handler needs in its context, derived from `r` with
+  `r.WithContext` (nil means `r`), or an error, answered like a handler's
+  error: a `Problem` with a code lets the client tell "signed out" from
+  "second factor missing". Response headers and cookies can be set in it
+  (3.7).
+- **One declaration, two readers.** The generator reads the same values
+  for OpenAPI: the scheme is named like the variable and described by its
+  doc comment, every route lists its security and the answers 401 and 403.
+  A route cannot be documented as protected and served open.
+- **Every route says it.** Once one route of a program has an `Auth`,
+  every route has `Auth` or `Public`; a route without either is an error
+  when generating. The route list is then the access table of the API.
+- An `Auth` names exactly one of `Cookie`, `Header` and `Bearer`, and has a
+  `Check`. `Public` and `Auth` exclude each other; `Scopes` need an `Auth`.
+  `Route` panics for these mistakes, the generator reports them.
+- `Options` are written in the call or as package variables initialised
+  with a literal, and an `Auth` is a package variable, so the generator can
+  read them. A route has one way in: a browser session and a key of
+  another system are separate routes.
+- Middleware that answers by itself, a rate limit or a CSRF check, still
+  answers with `WriteError`; what depends on the caller's identity, such as
+  choosing a tenant's database, belongs in the check.
 
 ## 4. Validation
 
@@ -451,12 +584,42 @@ func init() {
 |---|---|---|
 | `Pattern(name, expr, message)` | server and browser | the whole value must match. tether translates `expr` from Go's parse tree to JavaScript, writing out every class and case folding explicitly, and rejects what it cannot translate exactly (multiline anchors) |
 | `Check(name, fn func(string) bool, message)` | server only | for checks a pattern cannot express, such as check digits |
+| `Format[T](name, expr, message)` | server and browser | a `Pattern` bound to `T`, a type with `UnmarshalText` (below) |
 
-Both apply to strings only. Tags use them by name: `v:"required,hexColor"`.
+`Pattern` and `Check` apply to strings only. Tags use them by name: `v:"required,hexColor"`.
 A name must not collide with a built-in rule. `message` is the default text
 and must not be empty; `Messages` can override it like any other. The
 generator copies a `Pattern`'s text into the TypeScript runtime (5); a
 `Check`'s text stays on the server, the only side that reports it.
+
+**Formats.** A type that reads itself with `UnmarshalText`, such as
+`uuid.UUID`, travels as text, and only the server can run its
+`UnmarshalText`. A Format gives the browser the same check:
+
+```go
+func init() {
+	tether.Format[uuid.UUID]("uuid", `[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`, "Not a valid ID.")
+}
+```
+
+- Every value of `T`, in a field at any depth, in the query string and in a
+  path, must match the pattern before `UnmarshalText` sees it, on the
+  server and in the browser; a value that does not match is reported with
+  rule `name` and the message. Both check it with the shape, before the
+  rules (6.3), so it comes with `type` errors, not after them.
+- `""` means "not given" (3.3): an optional field stays nil or zero, a
+  required one is `required`.
+- A value the pattern lets through and `UnmarshalText` refuses is `type` on
+  the server only. The pattern is the project's promise that this does not
+  happen; write it at least as strict as the type.
+- `name` is a rule like a `Pattern`, so tags can use it on plain strings,
+  and `Messages` can replace its text. In OpenAPI it is the `format` of the
+  type, with the pattern.
+- The generator reports a route input or a path parameter of a type with
+  `UnmarshalText` that has no Format: the browser would let through what the
+  server rejects. `Validate` reads no text and needs none.
+- `Format` panics for a `T` without `UnmarshalText`, for `time.Time`, and
+  for a type registered twice.
 
 ### 4.3 Outside routes
 
@@ -553,9 +716,11 @@ go tool tether -out <dir> [-openapi <file>] [-title <text>] [-version <text>] [-
 - `-check`: write nothing; exit with status 1 and list every file that is
   missing or differs. For CI.
 
-It finds every call to `tether.Route` in the loaded packages and follows
-the types of every input and output. It also reads every `tether.Validate`
-call (4.3), to check the type and register its enums.
+It finds every call to `tether.Route` in the loaded packages, with its
+Options (3.9), and follows the types of every path parameter, input and
+output. It also reads every `tether.Validate` call (4.3), to check the type
+and register its enums, every `Pattern`, `Check` and `Format` call, and every
+`Problem` literal with a code (3.5).
 
 ### 6.1 Types
 
@@ -576,6 +741,7 @@ call (4.3), to check the type and register its enums.
 | generic struct instance | component per instance, `Page_Task` | generic interface, `Page<Task>` |
 | `json.RawMessage`, `any` | any value | `unknown` |
 | type implementing `encoding.TextMarshaler` | `string` | `string` |
+| … with a Format (4.2) | `string`, `format` and `pattern` | `string` |
 
 Struct fields follow `encoding/json`: the `json` name, `-` to skip,
 embedded structs without a name are flattened, unexported fields are
@@ -614,7 +780,14 @@ One OpenAPI 3.1 document for all routes:
 - `operationId` is the TypeScript function name; `summary` is the first
   sentence of the handler's doc comment, `description` the whole comment.
 - Path and query parameters, request body and responses with their schemas;
-  every operation also lists the problem response for `400` and `422`.
+  a path parameter has the schema of its type. Every operation also lists
+  the problem response for `400` and `422`.
+- With an `Auth` (3.9): `securitySchemes` named like the variables, an
+  `apiKey` in a cookie or header or `http` bearer, described by their doc
+  comments; every operation has `security`, `[]` for a public one, and a
+  protected one lists `401` and `403`.
+- The `Problem` schema lists every declared code with its status and text,
+  and `instance`.
 - Rules become the matching JSON Schema keywords (`minLength`, `maximum`,
   `exclusiveMinimum`, `minItems`, `format`, `enum`, `pattern`). Conditions
   and server-only checks are written as sentences in `description`. JSON
@@ -638,8 +811,13 @@ input, then options:
 
 ```ts
 /** UpdateTask changes a task. */
-export function updateTask(id: string, input: TaskInput, options?: RequestOptions): Promise<Task>
+export function updateTask(id: number, input: TaskInput, options?: RequestOptions): Promise<Task>
 ```
+
+- A path parameter has the type of its Go argument: `number`, an enum,
+  `boolean` or `string`.
+- With an `Auth` in the program, the doc comment says who may call the
+  route: `Access: Session, with admin.`
 
 - The input parameter is optional if the input type has no required field.
   The input type of a `PUT` route has every field required (6.1), so the
@@ -665,9 +843,11 @@ configure({
 ```
 
 **Errors.** A failed request throws `ApiError` with `status`, `message`
-(the problem's `detail`), `errors` (field errors) and `headers` (the
-response's headers, for a request id or `Retry-After`; empty for a network
-failure). A `422` throws `ValidationError`, a subclass. A network failure
+(the problem's `detail`), `errors` (field errors), `code` (the case of a
+`Problem`, typed as the union `ProblemCode` of the declared codes),
+`instance` (for a 500) and `headers` (the response's headers, for
+`Retry-After`; empty for a network failure). A `422` throws
+`ValidationError`, a subclass. A network failure
 throws `ApiError` with status `0`. Aborting through `options.signal` is
 never an `ApiError`: the request rejects with the signal's reason, as
 `fetch` does (an `AbortError`, or a `TimeoutError` for
@@ -685,12 +865,23 @@ try {
 }
 ```
 
+**Problems.** For every declared code `index.ts` has a function named
+after it, which takes the caught value as it is:
+
+```ts
+/** ErrMFARequired: the session waits for the second factor. Status 403, code mfaRequired. */
+export function isMfaRequired(e: unknown): e is ApiError & { readonly code: "mfaRequired" }
+
+if (isMfaRequired(e)) navigate("/auth/mfa");
+```
+
 **Validators.** One per input type, named `<type>Schema`
 (`taskInputSchema`). Each implements Standard Schema v1, so form libraries
 accept it directly (react-hook-form: `standardSchemaResolver`). It also
 offers:
 - `validate(value): FieldError[]`, the same field errors the server sends,
-  in the same order,
+  in the same order; a Format is checked with the shape, as on the
+  server,
 - `pick(...keys)` and `omit(...keys)` for forms that show only some fields;
   conditions that refer to a removed field are dropped with it,
 - `strip(value)`, the value with only the fields of the type.
@@ -717,7 +908,7 @@ Validators do not change values. Dates are ISO strings in both directions.
 - **Golden files:** the generator runs over `internal/gen/testdata/features`,
   over `internal/gen/testdata/qualify` with `-qualify`, and over the example,
   and compares OpenAPI, TypeScript and `tether_gen.go` byte for byte;
-  `internal/gen/testdata/mistakes` pins the error report.
+  `internal/gen/testdata/mistakes` and `access` pin the error reports.
   `go test ./internal/gen -update` rewrites them.
 - **End to end:** the example's test serves its API and drives it with the
   generated client in Node.js, asserting that browser and server report the
@@ -760,7 +951,8 @@ version, so its output does not change with every commit.
 
 ## 9. Out of scope
 
-Routing beyond `Route`, middleware, authentication, sessions, CSRF tokens
-(set them through `configure`), caching and query keys, form components,
+Routing beyond `Route`, middleware, how a caller is authenticated (sessions,
+keys and CSRF tokens are the project's `Check`; set request headers through
+`configure`), caching and query keys, form components,
 documentation pages, request bodies other than JSON and single file
 uploads, streaming, WebSockets, integer enums.

@@ -93,7 +93,7 @@ func Generate(o Options) ([]File, error) {
 	files := []File{
 		{Path: abs(o.OpenAPI), Data: m.renderOpenAPI(o.Title, o.Version)},
 		{Path: abs(filepath.Join(o.Out, "index.ts")), Data: m.renderIndex(header)},
-		{Path: abs(filepath.Join(o.Out, "runtime.ts")), Data: renderRuntime(header, messageTable(p.patterns, p.messages), jsPatterns, p.checks)},
+		{Path: abs(filepath.Join(o.Out, "runtime.ts")), Data: renderRuntime(header, messageTable(p.patterns, p.messages), jsPatterns, p.checks, m.codes())},
 	}
 	files = append(files, m.renderGoFiles(header)...)
 	return files, nil

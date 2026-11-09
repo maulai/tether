@@ -1,15 +1,28 @@
 // Drives the example server through the generated client: node client.ts <server url>
 import assert from "node:assert/strict";
 import { configure, ValidationError, ApiError } from "./runtime.ts";
-import { createTask, getTask, listTasks, updateTask, deleteTask, exportTasks, importTasks, taskInputSchema, taskFilterSchema } from "./index.ts";
+import { createTask, getTask, listTasks, updateTask, deleteTask, exportTasks, importTasks, isNoKey, taskInputSchema, taskFilterSchema } from "./index.ts";
 
-configure({ baseUrl: process.argv[2] ?? "" });
+const base = process.argv[2] ?? "";
+// Changes need the key; reading does not.
+configure({ baseUrl: base, headers: () => ({ "X-API-Key": "demo" }) });
 
 // TaskInput is also what UpdateTask reads with PUT, so its type asks for
 // every field: empty is "", null or [].
 const task = await createTask({ title: "Write the README", status: "open", reason: "", due: null, tags: ["docs"] });
 assert.equal(task.title, "Write the README");
 assert.deepEqual(task.tags, ["docs"]);
+
+// Without the key a change is refused before its input is read, with a
+// code the client recognises.
+try {
+  await createTask({ title: "x", status: "open", reason: "", due: null, tags: [] }, { headers: { "X-API-Key": "" } });
+  assert.fail("expected a refusal");
+} catch (e) {
+  assert.ok(isNoKey(e));
+  assert.equal(e.status, 401);
+  assert.equal(e.message, "Send a valid key in X-API-Key.");
+}
 
 // The browser and the server report the same errors for the same input.
 const bad = { title: " ", status: "blocked" as const, reason: "", due: null, tags: ["", "x".repeat(31), "Docs"] };
@@ -58,9 +71,9 @@ assert.deepEqual(done.tags, ["docs"]); // sent along, so kept
 
 // A PUT from outside the client that forgets fields is refused instead of
 // clearing them.
-const partial = await fetch(`${process.argv[2]}/v1/tasks/${task.id}`, {
+const partial = await fetch(`${base}/v1/tasks/${task.id}`, {
   method: "PUT",
-  headers: { "Content-Type": "application/json" },
+  headers: { "Content-Type": "application/json", "X-API-Key": "demo" },
   body: JSON.stringify({ title: "Write the README", status: "done" }),
 });
 assert.equal(partial.status, 422);
@@ -81,15 +94,11 @@ try {
   assert.ok(e.headers.get("X-Request-ID")); // the response's headers
 }
 
-// An id that does not parse never reaches the store.
-try {
-  await getTask("seven");
-  assert.fail("expected a 404");
-} catch (e) {
-  assert.ok(e instanceof ApiError);
-  assert.equal(e.status, 404);
-  assert.equal(e.message, "Not found.");
-}
+// The id is a number in Go, so it is one in TypeScript; an id that does
+// not parse, sent past the client, never reaches the handler.
+const seven = await fetch(`${base}/v1/tasks/seven`);
+assert.equal(seven.status, 404);
+assert.equal((await seven.json()).detail, "Not found.");
 // Uploads with progress go through XMLHttpRequest, which Node lacks. This
 // stand-in sends the request with fetch to the real server and hands the
 // answer back the way a browser's XMLHttpRequest would.

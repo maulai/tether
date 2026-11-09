@@ -4,6 +4,7 @@
 // mirrors the Go package rule for rule; the conformance vectors in the
 // tether repository check that both sides agree.
 
+export type ProblemCode = "itemLocked" | "soldOut";
 const messages: Record<string, string> = {
   email: "Keine gültige E-Mail-Adresse.",
   enum: "Bitte einen der angebotenen Werte wählen.",
@@ -12,6 +13,7 @@ const messages: Record<string, string> = {
   integer: "Bitte eine ganze Zahl eingeben.",
   internal: "Es ist ein Fehler aufgetreten.",
   invalid: "Bitte die markierten Felder prüfen.",
+  itemID: "Use eight hex digits.",
   lt: "Muss kleiner als {lt} sein.",
   malformed: "Die Anfrage konnte nicht gelesen werden.",
   max: "Höchstens {max}.",
@@ -36,6 +38,7 @@ const messages: Record<string, string> = {
   zip: "Bitte fünf Ziffern.",
 };
 const patterns: Record<string, RegExp> = {
+  itemID: /^(?:[0-9a-f]{8})$/u,
   sku: /^(?:[A-Z]{3}-[0-9]{4})$/u,
   zip: /^(?:[0-9]{5})$/u,
 };
@@ -52,29 +55,43 @@ export interface FieldError {
   message: string;
 }
 
+/** What a failed response says besides its status and text. */
+export interface ApiErrorInit {
+  errors?: FieldError[];
+  headers?: Headers;
+  code?: ProblemCode | undefined;
+  instance?: string | undefined;
+}
+
 /**
  * A failed request. status is 0 when the server could not be reached.
- * headers are the headers of the failed response, for a request id on an
- * error page or Retry-After with 429; across origins the browser shows only
- * those the server lists in Access-Control-Expose-Headers.
+ * headers are the headers of the failed response, for Retry-After with 429;
+ * across origins the browser shows only those the server lists in
+ * Access-Control-Expose-Headers.
  */
 export class ApiError extends Error {
   readonly status: number;
   readonly errors: FieldError[];
   readonly headers: Headers;
-  constructor(status: number, message: string, errors: FieldError[] = [], headers: Headers = new Headers()) {
+  /** The code of a problem the server declared; the is... functions of the client test it. */
+  readonly code: ProblemCode | undefined;
+  /** Names a server error; the server's log has the same instance with the cause. */
+  readonly instance: string | undefined;
+  constructor(status: number, message: string, init: ApiErrorInit = {}) {
     super(message);
     this.name = "ApiError";
     this.status = status;
-    this.errors = errors;
-    this.headers = headers;
+    this.errors = init.errors ?? [];
+    this.headers = init.headers ?? new Headers();
+    this.code = init.code;
+    this.instance = init.instance;
   }
 }
 
 /** A 422: the input failed validation; errors names the fields. */
 export class ValidationError extends ApiError {
-  constructor(message: string, errors: FieldError[], headers: Headers = new Headers()) {
-    super(422, message, errors, headers);
+  constructor(message: string, init: ApiErrorInit = {}) {
+    super(422, message, init);
     this.name = "ValidationError";
   }
 }
@@ -240,16 +257,18 @@ function parseHeaders(block: string): Headers {
 
 function failure(status: number, text: string, headers: Headers): ApiError {
   let detail = "";
-  let errors: FieldError[] = [];
+  const init: ApiErrorInit = { headers };
   try {
     const problem = JSON.parse(text);
     detail = problem.detail ?? problem.title ?? "";
-    errors = Array.isArray(problem.errors) ? problem.errors : [];
+    init.errors = Array.isArray(problem.errors) ? problem.errors : [];
+    if (typeof problem.code === "string") init.code = problem.code as ProblemCode;
+    if (typeof problem.instance === "string") init.instance = problem.instance;
   } catch {
     // not a problem document; keep the generic text
   }
   const message = detail || format(status >= 500 ? "internal" : "invalid");
-  return status === 422 ? new ValidationError(message, errors, headers) : new ApiError(status, message, errors, headers);
+  return status === 422 ? new ValidationError(message, init) : new ApiError(status, message, init);
 }
 
 // ── Validation ──────────────────────────────────────────────────────────────
@@ -265,6 +284,8 @@ export interface FieldSpec {
   int?: "int" | "int8" | "int16" | "int32" | "int64" | "uint" | "uint8" | "uint16" | "uint32" | "uint64";
   /** The values of an enum, including "" when Go declares it. */
   enum?: readonly string[];
+  /** The rule of a tether.Format: the text must match its pattern; "" means not given. */
+  format?: string;
   /** Elements of an array or record. */
   elem?: FieldSpec;
   /** The valid keys of a record whose Go key type is an enum. */
@@ -438,10 +459,13 @@ function shapeObject(path: string, v: unknown, fields: Compiled, out: FieldError
 function shape(path: string, v: unknown, p: Plan, out: FieldError[]): void {
   const t = p.spec.type;
   if (v === undefined || v === null) return;
-  if (v === "" && (t === "number" || t === "datetime")) return; // an empty input
+  if (v === "" && (t === "number" || t === "datetime" || p.spec.format)) return; // an empty input
   switch (t) {
     case "string":
       if (typeof v !== "string") add(out, path, "type");
+      // A Format is checked with the shape, as the server checks it before
+      // the type reads the text.
+      else if (p.spec.format && !(patterns[p.spec.format]?.test(v) ?? true)) add(out, path, p.spec.format);
       return;
     case "bytes":
       // Go decodes []byte as standard base64 and rejects anything else.
@@ -480,7 +504,7 @@ function shape(path: string, v: unknown, p: Plan, out: FieldError[]): void {
 // on both sides; "missing numbers are zero" is a rule of the API.
 function zero(v: unknown, p: Plan): unknown {
   const t = p.spec.type;
-  if (v === "" && (t === "number" || t === "datetime")) v = undefined;
+  if (v === "" && (t === "number" || t === "datetime" || p.spec.format)) v = undefined;
   if (v === undefined || v === null) {
     if (p.spec.nullable) return null;
     switch (t) {

@@ -3,7 +3,9 @@
 package features
 
 import (
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -17,6 +19,7 @@ func init() {
 	tether.Pattern("sku", `[A-Z]{3}-\d{4}`, "Use a code like ABC-1234.")
 	tether.Pattern("zip", `\d{5}`, "Use five digits.") // replaced by Messages below
 	tether.Check("ean13", func(s string) bool { return len(s) == 13 }, "Not a valid EAN-13.")
+	tether.Format[ItemID]("itemID", `[0-9a-f]{8}`, "Use eight hex digits.")
 	tether.Messages(de.Messages, map[string]string{"required": "Bitte ausfüllen.", "zip": "Bitte fünf Ziffern."})
 }
 
@@ -27,6 +30,39 @@ const (
 	KindNone    Kind = ""
 	KindProduct Kind = "product"
 	KindService Kind = "service"
+)
+
+// ItemID names an item; it reads itself from eight hex digits.
+type ItemID [4]byte
+
+func (id *ItemID) UnmarshalText(b []byte) error {
+	if hex.DecodedLen(len(b)) != len(id) {
+		return errors.New("not an item id")
+	}
+	_, err := hex.Decode(id[:], b)
+	return err
+}
+
+func (id ItemID) MarshalText() ([]byte, error) { return []byte(hex.EncodeToString(id[:])), nil }
+
+// ErrSoldOut: the item cannot be ordered now. The client recognises it
+// with isSoldOut.
+var ErrSoldOut = tether.Problem{Status: http.StatusConflict, Code: "soldOut", Message: "Sold out."}
+
+var errLocked = tether.Problem{Status: http.StatusLocked, Code: "itemLocked", Message: "The item is locked."}
+
+// Session is the sign-in of the browser.
+var Session = tether.Auth{Cookie: "session", Check: check}
+
+// Key is the key of another system.
+var Key = tether.Auth{Bearer: true, Check: check}
+
+func check(r *http.Request, scopes []string) (*http.Request, error) { return r, nil }
+
+var (
+	open     = tether.Options{Public: true}
+	signedIn = tether.Options{Auth: Session}
+	admin    = tether.Options{Auth: Session, Scopes: []string{"admin"}}
 )
 
 // Page is one page of a list.
@@ -66,6 +102,7 @@ type ItemInput struct {
 	Stock   map[Kind]int        `json:"stock"`
 	Lines   []Line              `json:"lines" v:"min=1"`
 	Size    string              `json:"size" v:"oneof=s m l"`
+	Parent  *ItemID             `json:"parent"`
 	Color   catalog.Color       `json:"color"`
 	Grade   legacycatalog.Grade `json:"grade"`
 	Contact struct {
@@ -132,19 +169,22 @@ type store struct{}
 func (s *store) List(r *http.Request, f Filter) (Page[Item], error) { return Page[Item]{}, nil }
 
 // CreateItem adds an item.
-func CreateItem(r *http.Request, in ItemInput) (*Item, error) { return nil, nil }
+func CreateItem(r *http.Request, in ItemInput) (*Item, error) { return nil, ErrSoldOut }
 
 // UploadImage stores an image for an item.
-func UploadImage(r *http.Request, f tether.Upload) (Item, error) { return Item{}, nil }
+func UploadImage(r *http.Request, id ItemID, f tether.Upload) (Item, error) { return Item{}, nil }
 
 // Sheet renders the data sheet of an item as PDF.
-func Sheet(r *http.Request) (tether.File, error) { return tether.File{}, nil }
+func Sheet(r *http.Request, id ItemID) (tether.File, error) { return tether.File{}, nil }
 
 // ServeAsset serves a static file below /assets/.
-func ServeAsset(r *http.Request) (tether.File, error) { return tether.File{}, nil }
+func ServeAsset(r *http.Request, path string) (tether.File, error) { return tether.File{}, nil }
 
 // Archive archives an item.
-func Archive(r *http.Request) error { return nil }
+func Archive(r *http.Request, _ ItemID) error { return errLocked }
+
+// StockOf returns how many items of a kind lie on shelf n.
+func StockOf(r *http.Request, kind Kind, n int) (int, error) { return 0, nil }
 
 // ReplaceSettings replaces the shop's settings.
 func ReplaceSettings(r *http.Request, in Settings) (Settings, error) { return in, nil }
@@ -152,11 +192,12 @@ func ReplaceSettings(r *http.Request, in Settings) (Settings, error) { return in
 // Routes registers the API.
 func Routes(mux *http.ServeMux) {
 	s := &store{}
-	mux.Handle(tether.Route("GET /api/items", s.List))
-	mux.Handle(tether.Route("POST /api/items", CreateItem))
-	mux.Handle(tether.Route("POST /api/items/{id}/image", UploadImage))
-	mux.Handle(tether.Route("GET /api/items/{id}/sheet", Sheet))
-	mux.Handle(tether.Route("GET /assets/{path...}", ServeAsset))
-	mux.Handle(tether.Route("PATCH /api/items/{id}/archive", Archive))
-	mux.Handle(tether.Route("PUT /api/settings", ReplaceSettings))
+	mux.Handle(tether.Route("GET /api/items", s.List, open))
+	mux.Handle(tether.Route("POST /api/items", CreateItem, signedIn))
+	mux.Handle(tether.Route("POST /api/items/{id}/image", UploadImage, signedIn))
+	mux.Handle(tether.Route("GET /api/items/{id}/sheet", Sheet, tether.Options{Auth: Key, Scopes: []string{"items:read"}}))
+	mux.Handle(tether.Route("GET /assets/{path...}", ServeAsset, open))
+	mux.Handle(tether.Route("PATCH /api/items/{id}/archive", Archive, admin))
+	mux.Handle(tether.Route("GET /api/stock/{kind}/{n}", StockOf, open))
+	mux.Handle(tether.Route("PUT /api/settings", ReplaceSettings, admin))
 }

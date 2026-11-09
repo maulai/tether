@@ -3,6 +3,7 @@ package gen
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -40,33 +41,66 @@ func (m *model) renderOpenAPI(title, version string) []byte {
 			"message": obj{"type": "string"},
 		},
 	}
+	props := obj{
+		"type":     obj{"type": "string"},
+		"title":    obj{"type": "string"},
+		"status":   obj{"type": "integer"},
+		"detail":   obj{"type": "string"},
+		"instance": obj{"type": "string", "description": "Names a server error; the server's log has the same instance with the cause."},
+		"errors":   obj{"type": "array", "items": ref("FieldError")},
+	}
+	if problems := m.sortedProblems(); len(problems) > 0 {
+		var cases []any
+		for _, pd := range problems {
+			desc := pd.doc
+			if desc == "" {
+				desc = pd.message
+			}
+			cases = append(cases, obj{"const": pd.code, "description": strings.TrimSpace(fmt.Sprintf("Status %d. %s", pd.status, desc))})
+		}
+		props["code"] = obj{"type": "string", "description": "The case of a problem the client can react to.", "oneOf": cases}
+	}
 	o.schemas["Problem"] = obj{
 		"type":        "object",
 		"description": "RFC 9457 problem details.",
 		"required":    []string{"type", "title", "status"},
-		"properties": obj{
-			"type":   obj{"type": "string"},
-			"title":  obj{"type": "string"},
-			"status": obj{"type": "integer"},
-			"detail": obj{"type": "string"},
-			"errors": obj{"type": "array", "items": ref("FieldError")},
-		},
+		"properties":  props,
 	}
 	problem := func(desc string) obj {
 		return obj{"description": desc, "content": obj{"application/problem+json": obj{"schema": ref("Problem")}}}
 	}
+	responses := obj{
+		"BadRequest": problem("The request body could not be read."),
+		"Invalid":    problem("The input failed validation; errors names the fields."),
+		"Error":      problem("Any other error."),
+	}
+	components := obj{"schemas": o.schemas, "responses": responses}
+	if m.anyAuth {
+		responses["Unauthorized"] = problem("The request has no valid credentials.")
+		responses["Forbidden"] = problem("The credentials do not allow this request.")
+		schemes := obj{}
+		for _, a := range m.sortedAuths() {
+			var s obj
+			switch {
+			case a.cookie != "":
+				s = obj{"type": "apiKey", "in": "cookie", "name": a.cookie}
+			case a.header != "":
+				s = obj{"type": "apiKey", "in": "header", "name": a.header}
+			default:
+				s = obj{"type": "http", "scheme": "bearer"}
+			}
+			if a.doc != "" {
+				s["description"] = a.doc
+			}
+			schemes[a.name] = s
+		}
+		components["securitySchemes"] = schemes
+	}
 	doc := obj{
-		"openapi": "3.1.0",
-		"info":    obj{"title": title, "version": version},
-		"paths":   paths,
-		"components": obj{
-			"schemas": o.schemas,
-			"responses": obj{
-				"BadRequest": problem("The request body could not be read."),
-				"Invalid":    problem("The input failed validation; errors names the fields."),
-				"Error":      problem("Any other error."),
-			},
-		},
+		"openapi":    "3.1.0",
+		"info":       obj{"title": title, "version": version},
+		"paths":      paths,
+		"components": components,
 	}
 	var b bytes.Buffer
 	enc := json.NewEncoder(&b)
@@ -100,8 +134,8 @@ func (o *openAPI) operation(r *route) obj {
 		}
 	}
 	var params []any
-	for _, p := range r.params {
-		params = append(params, obj{"name": p.name, "in": "path", "required": true, "schema": obj{"type": "string"}})
+	for i, p := range r.params {
+		params = append(params, obj{"name": p.name, "in": "path", "required": true, "schema": o.schema(o.m.pathTypes[r][i], nil)})
 	}
 	in := o.m.inTypes[r]
 	switch {
@@ -142,6 +176,20 @@ func (o *openAPI) operation(r *route) obj {
 	if in != nil && !r.query || r.upload {
 		responses["400"] = obj{"$ref": "#/components/responses/BadRequest"}
 	}
+	if o.m.anyAuth {
+		switch a := r.access; {
+		case a.auth != nil:
+			scopes := a.scopes
+			if scopes == nil {
+				scopes = []string{}
+			}
+			op["security"] = []any{obj{a.auth.name: scopes}}
+			responses["401"] = obj{"$ref": "#/components/responses/Unauthorized"}
+			responses["403"] = obj{"$ref": "#/components/responses/Forbidden"}
+		default:
+			op["security"] = []any{}
+		}
+	}
 	status := "200"
 	if r.method == "POST" {
 		status = "201"
@@ -175,7 +223,14 @@ func firstSentence(s string) string {
 func (o *openAPI) schema(t *tsType, subst map[string]*tsType) obj {
 	switch t.kind {
 	case kString:
-		return obj{"type": "string"}
+		s := obj{"type": "string"}
+		if t.format != "" {
+			s["format"] = t.format
+			if js, err := jsregex.Translate(o.m.patterns[t.format].expr); err == nil {
+				s["pattern"] = "^(?:" + js + ")$"
+			}
+		}
+		return s
 	case kInteger:
 		s := obj{"type": "integer"}
 		switch t.intKind {

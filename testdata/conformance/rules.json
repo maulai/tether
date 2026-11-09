@@ -3,6 +3,9 @@
     "hexColor": { "go": "#[0-9a-fA-F]{6}", "js": "#[0-9A-Fa-f]{6}", "message": "Use a colour like #1a2b3c." },
     "code": { "go": "(?i)ab\\d", "js": "[Aa][Bb][0-9]", "message": "Use a code like AB1." }
   },
+  "formats": {
+    "code3": { "type": "code", "go": "[a-z]{2}\\d|[A-Z]{2}", "js": "(?:[a-z]{2}[0-9]|[A-Z]{2})", "message": "Use two letters and a digit." }
+  },
   "checks": ["even"],
   "cases": [
     { "name": "required string missing", "fields": [{ "name": "title", "type": "string", "tag": "required" }], "input": {}, "errors": [{ "field": "title", "rule": "required" }] },
@@ -107,6 +110,15 @@
     { "name": "pattern case folding", "fields": [{ "name": "code", "type": "string", "tag": "code" }], "input": { "code": "aB7" }, "errors": [] },
     { "name": "pattern reports its own message", "fields": [{ "name": "code", "type": "string", "tag": "code" }], "input": { "code": "ac7" }, "errors": [{ "field": "code", "rule": "code", "message": "Use a code like AB1." }] },
     { "name": "pattern skips an empty optional value", "fields": [{ "name": "color", "type": "string", "tag": "hexColor" }], "input": { "color": "" }, "errors": [] },
-    { "name": "check runs on the server only", "fields": [{ "name": "code", "type": "string", "tag": "even" }], "input": { "code": "abc" }, "errors": [{ "field": "code", "rule": "even" }], "browser": [] }
+    { "name": "check runs on the server only", "fields": [{ "name": "code", "type": "string", "tag": "even" }], "input": { "code": "abc" }, "errors": [{ "field": "code", "rule": "even" }], "browser": [] },
+    { "name": "format matches", "fields": [{ "name": "c", "type": "code", "tag": "" }], "input": { "c": "ab1" }, "errors": [] },
+    { "name": "format reports its own message", "fields": [{ "name": "c", "type": "code", "tag": "" }], "input": { "c": "abc" }, "errors": [{ "field": "c", "rule": "code3", "message": "Use two letters and a digit." }] },
+    { "name": "format comes with the shape", "fields": [{ "name": "c", "type": "code", "tag": "" }, { "name": "n", "type": "int", "tag": "min=1" }], "input": { "c": "abc", "n": "x" }, "errors": [{ "field": "c", "rule": "code3" }, { "field": "n", "rule": "type" }] },
+    { "name": "format passed, the type refuses", "fields": [{ "name": "c", "type": "code", "tag": "" }], "input": { "c": "AB" }, "errors": [{ "field": "c", "rule": "type" }], "browser": [] },
+    { "name": "format empty is not given", "fields": [{ "name": "c", "type": "code", "tag": "" }], "input": { "c": "" }, "errors": [] },
+    { "name": "format empty and required", "fields": [{ "name": "c", "type": "code", "tag": "required" }], "input": { "c": "" }, "errors": [{ "field": "c", "rule": "required" }] },
+    { "name": "format empty pointer is null", "fields": [{ "name": "c", "type": "*code", "tag": "required" }], "input": { "c": "" }, "errors": [{ "field": "c", "rule": "required" }] },
+    { "name": "format not a string", "fields": [{ "name": "c", "type": "code", "tag": "" }], "input": { "c": 7 }, "errors": [{ "field": "c", "rule": "type" }] },
+    { "name": "format in a list", "fields": [{ "name": "c", "type": "[]code", "tag": "" }], "input": { "c": ["ab1", "x"] }, "errors": [{ "field": "c.1", "rule": "code3" }] }
   ]
 }

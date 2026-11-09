@@ -109,6 +109,10 @@
             },
             "type": "array"
           },
+          "instance": {
+            "description": "Names a server error; the server's log has the same instance with the cause.",
+            "type": "string"
+          },
           "status": {
             "type": "integer"
           },

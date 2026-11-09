@@ -49,6 +49,11 @@ func CreateTask(r *http.Request, in TaskInput) (Task, error) {
 	return save(in), nil
 }
 
+// GetTask returns one task.
+func GetTask(r *http.Request, id int) (Task, error) {
+	return load(id)
+}
+
 func main() {
 	mux := http.NewServeMux()
 	mux.Handle(tether.Route("POST /v1/tasks", CreateTask))
@@ -57,14 +62,23 @@ func main() {
 }
 ```
 
-A handler is a named function with one of these shapes:
+A handler is a named function. It takes `r`, then the parameters of its
+pattern in their order, then optionally its input, and returns an output
+and an error, or only an error (`204 No Content`):
 
 ```go
-func(r *http.Request) (Out, error)
-func(r *http.Request, in In) (Out, error)
-func(r *http.Request) error             // 204 No Content
-func(r *http.Request, in In) error
+func ListTasks(r *http.Request) ([]Task, error)                      // GET /v1/tasks
+func CreateTask(r *http.Request, in TaskInput) (Task, error)         // POST /v1/tasks
+func GetTask(r *http.Request, id int) (Task, error)                  // GET /v1/tasks/{id}
+func UpdateTask(r *http.Request, id int, in TaskInput) (Task, error) // PUT /v1/tasks/{id}
+func DeleteTask(r *http.Request, id int) error                       // DELETE /v1/tasks/{id}
 ```
+
+A path parameter is parsed into its type before the handler runs: strings,
+numbers, booleans, enums, `time.Time` and types such as `uuid.UUID` (see
+Formats). A value that does not parse answers 404, and the client takes it
+in its type, `getTask(id: number)`. A parameter the handler does not need
+is named `_`.
 
 `In` comes from the query string for `GET` and `DELETE`, and from the JSON
 body otherwise. tether decodes and validates `In` before your handler runs;
@@ -76,23 +90,28 @@ A `PUT` replaces the whole record, so its body must send every field;
 (`missing`) instead of a value cleared without notice, and the generated
 TypeScript type asks for all of them.
 
-Path parameters are read as usual with `r.PathValue("id")`, or parsed into
-a type; a value that does not parse answers 404 before your code runs:
-
-```go
-id, err := tether.PathValue[uuid.UUID](r, "id") // also ints, enums, time.Time
-if err != nil {
-	return Task{}, err
-}
-```
-
 Errors are RFC 9457 problem details:
 
 | Return | Status |
 |---|---|
 | `tether.FieldError("title", "…")` (combine several with `errors.Join`) | 422, the message at the field |
 | `tether.Fail(http.StatusConflict, "…")` | that status, with that message |
-| any other error | 500 with a generic message; the error goes to `log/slog` |
+| a `tether.Problem` (below) | its status, its message and its code |
+| any other error, or a panic | 500 with a generic message and an `instance`; the cause goes to `log/slog` with the same instance |
+
+A case the client must tell apart from others with the same status is a
+`Problem` with a code, declared once:
+
+```go
+// ErrMFARequired: the session waits for the second factor.
+var ErrMFARequired = tether.Problem{Status: http.StatusForbidden, Code: "mfaRequired", Message: "Two-factor sign-in required."}
+
+return ErrMFARequired
+return ErrSuspended.With("This archive is suspended: " + reason) // another text, the same code
+```
+
+The client gets a function for it, `isMfaRequired(e)`, and `errors.Is`
+recognises it in Go.
 
 Errors of packages you cannot change are translated in one place:
 
@@ -111,10 +130,10 @@ Middleware answers in the same format with `tether.WriteError`, so the
 client gets the message:
 
 ```go
-func requireSession(next http.Handler) http.Handler {
+func rateLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !sessions.Valid(r) {
-			tether.WriteError(w, r, tether.Fail(http.StatusUnauthorized, "Please sign in."))
+		if !limiter.Allow(r) {
+			tether.WriteError(w, r, tether.Fail(http.StatusTooManyRequests, "Too many requests."))
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -122,7 +141,8 @@ func requireSession(next http.Handler) http.Handler {
 }
 ```
 
-The example recovers panics the same way.
+A panic in a handler is answered like any other unexpected error, so the
+client sees a failed request, not an unreachable server.
 
 Files are returned as `tether.File`. A body that can seek, such as an
 `*os.File` or an S3 object, answers `Range` requests (a PDF viewer loading
@@ -130,8 +150,8 @@ page by page, a resumed download) and `If-Modified-Since`:
 
 ```go
 // Document serves a stored document.
-func Document(r *http.Request) (tether.File, error) {
-	obj, info, err := store.Open(r.Context(), r.PathValue("id"))
+func Document(r *http.Request, id string) (tether.File, error) {
+	obj, info, err := store.Open(r.Context(), id)
 	if err != nil {
 		return tether.File{}, err
 	}
@@ -156,6 +176,48 @@ func SignIn(r *http.Request, in Credentials) error {
 ```
 
 For other headers: `tether.ResponseHeader(r).Set("Cache-Control", "no-store")`.
+
+## Access
+
+Who may call a route is part of the API. Each way a caller proves who it
+is is declared once, with the project's check, and each route says which
+it needs:
+
+```go
+// Session is the sign-in of the browser: a session cookie and a CSRF header.
+var Session = tether.Auth{Cookie: "session_token", Check: checkSession}
+
+var (
+	open     = tether.Options{Public: true}
+	signedIn = tether.Options{Auth: Session}
+	admin    = tether.Options{Auth: Session, Scopes: []string{"admin"}}
+)
+
+mux.Handle(tether.Route("POST /v1/login", Login, open))
+mux.Handle(tether.Route("GET /v1/me", GetMe, signedIn))
+mux.Handle(tether.Route("POST /v1/categories", CreateCategory, admin))
+```
+
+The check is the project's code; it returns the request with what the
+handler needs in its context:
+
+```go
+func checkSession(r *http.Request, scopes []string) (*http.Request, error) {
+	account, err := sessions.Account(r)
+	if err != nil {
+		return nil, err // a Problem, such as ErrMFARequired
+	}
+	if slices.Contains(scopes, "admin") && !account.IsAdmin {
+		return nil, ErrAdminOnly
+	}
+	return r.WithContext(withAccount(r.Context(), account)), nil
+}
+```
+
+tether calls the check before it reads the input, and the OpenAPI document
+lists the schemes and every route's security, so documentation and check
+cannot drift. Once one route has an `Auth`, every route says `Auth` or
+`Public`; a forgotten one is an error when generating.
 
 ## Generate
 
@@ -213,9 +275,20 @@ async function onSubmit(values: TaskInput) {
 
 For a form that edits only some fields: `taskInputSchema.pick("title")`.
 
-A failed request throws `ApiError` (or `ValidationError` for a 422) with the
-response's `headers`, for a request id on an error page or `Retry-After`.
-Across origins, list such headers in `Access-Control-Expose-Headers`.
+A failed request throws `ApiError` (or `ValidationError` for a 422) with
+the problem's `code`, the `instance` of a 500 for an error page, and the
+response's `headers`, for `Retry-After`. Across origins, list such headers
+in `Access-Control-Expose-Headers`. A declared problem has its own test:
+
+```ts
+import { isMfaRequired } from "./api";
+
+try {
+  await getMe();
+} catch (e) {
+  if (isMfaRequired(e)) navigate("/auth/mfa");
+}
+```
 
 ## Rules
 
@@ -263,6 +336,23 @@ func init() {
 Then use them by name: `v:"required,hexColor"`. A `Pattern` must match the
 whole value and runs in the browser too; tether translates it to JavaScript
 exactly or refuses it.
+
+## Formats
+
+A type that reads itself with `UnmarshalText`, such as `uuid.UUID`, needs a
+Format, so the browser checks it as the server does:
+
+```go
+func init() {
+	tether.Format[uuid.UUID]("uuid", `[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`, "Not a valid ID.")
+}
+```
+
+Every value of the type, in the body, the query string and the path, must
+match before `UnmarshalText` sees it, with the Format's message on both
+sides; `""` means "not given". In OpenAPI it is `format: uuid` with the
+pattern. Without a Format, such a type in an input is an error when
+generating.
 
 ## Messages
 

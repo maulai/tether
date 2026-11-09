@@ -26,6 +26,7 @@ func TestRuntimeConformance(t *testing.T) {
 	}
 	var v struct {
 		Patterns map[string]struct{ Go, JS, Message string } `json:"patterns"`
+		Formats  map[string]struct{ Go, JS, Message string } `json:"formats"`
 		Checks   []string                                    `json:"checks"`
 	}
 	if err := json.Unmarshal(data, &v); err != nil {
@@ -37,6 +38,10 @@ func TestRuntimeConformance(t *testing.T) {
 		patterns[name] = pattern{expr: p.Go, message: p.Message}
 		js[name] = p.JS
 	}
+	for name, f := range v.Formats {
+		patterns[name] = pattern{expr: f.Go, message: f.Message}
+		js[name] = f.JS
+	}
 
 	dir := t.TempDir()
 	runner, err := os.ReadFile("testdata/conformance.ts")
@@ -44,7 +49,7 @@ func TestRuntimeConformance(t *testing.T) {
 		t.Fatal(err)
 	}
 	write(t, filepath.Join(dir, "conformance.ts"), runner)
-	write(t, filepath.Join(dir, "runtime.ts"), renderRuntime("// test", messageTable(patterns, nil), js, v.Checks))
+	write(t, filepath.Join(dir, "runtime.ts"), renderRuntime("// test", messageTable(patterns, nil), js, v.Checks, nil))
 
 	out, err := exec.Command(node, filepath.Join(dir, "conformance.ts"), vectorsPath).CombinedOutput()
 	t.Logf("%s", out)

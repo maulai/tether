@@ -67,8 +67,26 @@ func (m *model) renderIndex(header string) []byte {
 		m.renderRoute(&body, r, used)
 	}
 
+	problems := m.sortedProblems()
+	if len(problems) > 0 {
+		used["ApiError"] = true
+		body.WriteString("// ── Problems ──────────────────────────────────────────────────────────────\n\n")
+	}
+	for _, pd := range problems {
+		doc := pd.doc
+		if doc == "" {
+			doc = pd.message
+		}
+		if doc != "" {
+			doc += "\n\n"
+		}
+		writeDoc(&body, "", fmt.Sprintf("%sStatus %d, code %s.", doc, pd.status, pd.code))
+		fmt.Fprintf(&body, "export function %s(e: unknown): e is ApiError & { readonly code: %s } {\n", guardName(pd.code), tsString(pd.code))
+		fmt.Fprintf(&body, "  return e instanceof ApiError && e.code === %s;\n}\n\n", tsString(pd.code))
+	}
+
 	var imports []string
-	for _, name := range []string{"call", "schema", "url"} {
+	for _, name := range []string{"ApiError", "call", "schema", "url"} {
 		if used[name] {
 			imports = append(imports, name)
 		}
@@ -200,6 +218,9 @@ func (m *model) spec(t *tsType, indent string) string {
 		inner := m.spec(t.elem, indent)
 		return strings.TrimSuffix(inner, " }") + ", nullable: true }"
 	case kString:
+		if t.format != "" {
+			return `{ type: "string", format: ` + tsString(t.format) + " }"
+		}
 		return `{ type: "string" }`
 	case kEnum:
 		return `{ type: "string", enum: ` + enumList(t.enum) + " }"
@@ -234,11 +255,15 @@ func (m *model) renderRoute(b *strings.Builder, r *route, used map[string]bool) 
 	if doc != "" {
 		doc += "\n\n"
 	}
-	writeDoc(b, "", doc+r.method+" "+r.path)
+	doc += r.method + " " + r.path
+	if m.anyAuth {
+		doc += "\n\nAccess: " + accessText(r.access)
+	}
+	writeDoc(b, "", doc)
 
 	var params []string
-	for _, p := range r.params {
-		params = append(params, p.name+": string")
+	for i, p := range r.params {
+		params = append(params, p.name+": "+m.expr(m.pathTypes[r][i], ""))
 	}
 	in := m.inTypes[r]
 	var payload string
@@ -280,8 +305,8 @@ func (m *model) renderRoute(b *strings.Builder, r *route, used map[string]bool) 
 	if r.file && r.method == "GET" {
 		used["url"] = true
 		var uparams []string
-		for _, p := range r.params {
-			uparams = append(uparams, p.name+": string")
+		for i, p := range r.params {
+			uparams = append(uparams, p.name+": "+m.expr(m.pathTypes[r][i], ""))
 		}
 		query := ""
 		if in != nil {
@@ -295,6 +320,17 @@ func (m *model) renderRoute(b *strings.Builder, r *route, used map[string]bool) 
 		fmt.Fprintf(b, "/** The address of %s, for links. */\n", r.name)
 		fmt.Fprintf(b, "export function %sUrl(%s): string {\n  return url(%s%s);\n}\n\n", r.name, strings.Join(uparams, ", "), path, query)
 	}
+}
+
+// accessText says who may call a route, for its doc comment.
+func accessText(a access) string {
+	switch {
+	case a.auth == nil:
+		return "public."
+	case len(a.scopes) > 0:
+		return a.auth.name + ", with " + strings.Join(a.scopes, ", ") + "."
+	}
+	return a.auth.name + "."
 }
 
 // enumList is the expression for all valid values of an enum, "" included

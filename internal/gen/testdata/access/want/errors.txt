@@ -1,0 +1,10 @@
+9 problem(s):
+  internal/gen/testdata/access/access.go:17:12: Both: an Auth names exactly one of Cookie, Header and Bearer
+  internal/gen/testdata/access/access.go:22:6: GET /open: say who may call it, with Auth or Public in tether.Options; other routes need an Auth
+  internal/gen/testdata/access/access.go:24:6: GET /scoped: say who may call it, with Auth or Public in tether.Options; other routes need an Auth
+  internal/gen/testdata/access/access.go:25:6: GET /inline: say who may call it, with Auth or Public in tether.Options; other routes need an Auth
+  internal/gen/testdata/access/access.go:26:6: GET /called: say who may call it, with Auth or Public in tether.Options; other routes need an Auth
+  internal/gen/testdata/access/access.go:32:47: a route is either Public or has an Auth, not both
+  internal/gen/testdata/access/access.go:33:49: Scopes need an Auth that checks them
+  internal/gen/testdata/access/access.go:34:70: declare the Auth as a package variable and name it here; its name names it in OpenAPI
+  internal/gen/testdata/access/access.go:35:49: the Options must be a tether.Options literal or a package variable initialised with one, so tether can read them

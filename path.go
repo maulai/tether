@@ -2,41 +2,64 @@ package tether
 
 import (
 	"encoding"
-	"fmt"
-	"net/http"
 	"reflect"
 	"strings"
 )
 
-// PathValue parses the path parameter name into a T: a string type, an enum,
-// a number, a boolean, a time.Time, or a type with UnmarshalText such as
-// uuid.UUID. A value that does not parse, or is not a value of the enum,
-// returns an error that answers the request with 404: a malformed address
-// names no resource. Return it from the handler as it is.
-//
-//	id, err := tether.PathValue[uuid.UUID](r, "id")
-//	if err != nil {
-//		return Task{}, err
-//	}
-//
-// It panics for a T it cannot parse into and for a name the route's pattern
-// does not have: both are programming errors.
-func PathValue[T any](r *http.Request, name string) (T, error) {
-	var v T
-	if r.Pattern != "" && !strings.Contains(r.Pattern, "{"+name+"}") && !strings.Contains(r.Pattern, "{"+name+"...}") {
-		panic(fmt.Sprintf("tether: PathValue: pattern %q has no parameter {%s}", r.Pattern, name))
-	}
-	s := r.PathValue(name)
-	rv := reflect.ValueOf(&v).Elem()
-	if !parsePath(s, rv) {
-		return v, Fail(http.StatusNotFound, message("notFound", nil))
-	}
-	return v, nil
+// pathParam is one parameter of a route's pattern, which the handler takes
+// as an argument after r.
+type pathParam struct {
+	name string
+	rest bool // {name...}, the rest of the path
+	typ  reflect.Type
 }
 
+// patternParams lists the parameters of a ServeMux path in order; {$}
+// marks the end of the path and is none.
+func patternParams(path string) []pathParam {
+	var out []pathParam
+	for {
+		i := strings.Index(path, "{")
+		if i < 0 {
+			return out
+		}
+		j := strings.Index(path[i:], "}")
+		if j < 0 {
+			return out
+		}
+		name := path[i+1 : i+j]
+		path = path[i+j+1:]
+		if name == "$" {
+			continue
+		}
+		out = append(out, pathParam{name: strings.TrimSuffix(name, "..."), rest: strings.HasSuffix(name, "...")})
+	}
+}
+
+// pathType reports whether a path parameter can be parsed into t.
+func pathType(t reflect.Type) bool {
+	if t == timeType || reflect.PointerTo(t).Implements(textUnmarshaler) {
+		return true
+	}
+	switch t.Kind() {
+	case reflect.String, reflect.Bool,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
+		reflect.Float32, reflect.Float64:
+		return true
+	}
+	return false
+}
+
+// parsePath parses one path value into v, whose type pathType accepted. A
+// value of an enum must be one of its values, a value of a type with a
+// Format must match it.
 func parsePath(s string, v reflect.Value) bool {
 	t := v.Type()
 	if u, ok := v.Addr().Interface().(encoding.TextUnmarshaler); ok && t != timeType {
+		if f, ok := formatFor(t); ok && !f.re.MatchString(s) {
+			return false
+		}
 		return u.UnmarshalText([]byte(s)) == nil
 	}
 	switch {
@@ -63,11 +86,5 @@ func parsePath(s string, v reflect.Value) bool {
 		}
 		return true
 	}
-	switch t.Kind() {
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
-		reflect.Float32, reflect.Float64:
-		return s != "" && setNumber(v, s) == ""
-	}
-	panic(fmt.Sprintf("tether: PathValue cannot parse into %s", t))
+	return s != "" && setNumber(v, s) == ""
 }

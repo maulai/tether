@@ -121,13 +121,27 @@ func TestRemovesOldRegistrations(t *testing.T) {
 }
 
 func TestMistakes(t *testing.T) {
+	mistakes(t, "mistakes")
+}
+
+// TestAccessMistakes pins the report for mistakes in who may call a route.
+// They live apart, because one Auth makes every route of a program say
+// who may call it.
+func TestAccessMistakes(t *testing.T) {
+	mistakes(t, "access")
+}
+
+// mistakes compares the generator's report for testdata/<name> with
+// want/errors.txt there.
+func mistakes(t *testing.T, name string) {
+	t.Helper()
 	dir := root(t)
-	_, err := Generate(Options{Dir: dir, Patterns: []string{"./internal/gen/testdata/mistakes/..."}, Out: "unused"})
+	_, err := Generate(Options{Dir: dir, Patterns: []string{"./internal/gen/testdata/" + name + "/..."}, Out: "unused"})
 	if err == nil {
 		t.Fatal("no error")
 	}
 	got := strings.ReplaceAll(err.Error(), dir+string(filepath.Separator), "") + "\n"
-	want := filepath.Join("testdata", "mistakes", "want", "errors.txt")
+	want := filepath.Join("testdata", name, "want", "errors.txt")
 	if *update {
 		os.MkdirAll(filepath.Dir(want), 0o755)
 		os.WriteFile(want, []byte(got), 0o644)

@@ -21,6 +21,16 @@
         },
         "description": "Any other error."
       },
+      "Forbidden": {
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        },
+        "description": "The credentials do not allow this request."
+      },
       "Invalid": {
         "content": {
           "application/problem+json": {
@@ -30,6 +40,16 @@
           }
         },
         "description": "The input failed validation; errors names the fields."
+      },
+      "Unauthorized": {
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        },
+        "description": "The request has no valid credentials."
       }
     },
     "schemas": {
@@ -172,6 +192,18 @@
             "minItems": 1,
             "type": "array"
           },
+          "parent": {
+            "anyOf": [
+              {
+                "format": "itemID",
+                "pattern": "^(?:[0-9a-f]{8})$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "price": {
             "anyOf": [
               {
@@ -300,6 +332,20 @@
       "Problem": {
         "description": "RFC 9457 problem details.",
         "properties": {
+          "code": {
+            "description": "The case of a problem the client can react to.",
+            "oneOf": [
+              {
+                "const": "itemLocked",
+                "description": "Status 423. The item is locked."
+              },
+              {
+                "const": "soldOut",
+                "description": "Status 409. ErrSoldOut: the item cannot be ordered now. The client recognises it\nwith isSoldOut."
+              }
+            ],
+            "type": "string"
+          },
           "detail": {
             "type": "string"
           },
@@ -308,6 +354,10 @@
               "$ref": "#/components/schemas/FieldError"
             },
             "type": "array"
+          },
+          "instance": {
+            "description": "Names a server error; the server's log has the same instance with the cause.",
+            "type": "string"
           },
           "status": {
             "type": "integer"
@@ -362,6 +412,19 @@
           "labels"
         ],
         "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "Key": {
+        "description": "Key is the key of another system.",
+        "scheme": "bearer",
+        "type": "http"
+      },
+      "Session": {
+        "description": "Session is the sign-in of the browser.",
+        "in": "cookie",
+        "name": "session",
+        "type": "apiKey"
       }
     }
   },
@@ -444,6 +507,7 @@
             "$ref": "#/components/responses/Error"
           }
         },
+        "security": [],
         "summary": "List returns a page of items."
       },
       "post": {
@@ -479,6 +543,12 @@
           "400": {
             "$ref": "#/components/responses/BadRequest"
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
           "422": {
             "$ref": "#/components/responses/Invalid"
           },
@@ -486,6 +556,11 @@
             "$ref": "#/components/responses/Error"
           }
         },
+        "security": [
+          {
+            "Session": []
+          }
+        ],
         "summary": "CreateItem adds an item."
       }
     },
@@ -498,6 +573,8 @@
             "name": "id",
             "required": true,
             "schema": {
+              "format": "itemID",
+              "pattern": "^(?:[0-9a-f]{8})$",
               "type": "string"
             }
           }
@@ -506,6 +583,12 @@
           "204": {
             "description": "No Content"
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
           "422": {
             "$ref": "#/components/responses/Invalid"
           },
@@ -513,6 +596,13 @@
             "$ref": "#/components/responses/Error"
           }
         },
+        "security": [
+          {
+            "Session": [
+              "admin"
+            ]
+          }
+        ],
         "summary": "Archive archives an item."
       }
     },
@@ -525,6 +615,8 @@
             "name": "id",
             "required": true,
             "schema": {
+              "format": "itemID",
+              "pattern": "^(?:[0-9a-f]{8})$",
               "type": "string"
             }
           }
@@ -562,6 +654,12 @@
           "400": {
             "$ref": "#/components/responses/BadRequest"
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
           "422": {
             "$ref": "#/components/responses/Invalid"
           },
@@ -569,6 +667,11 @@
             "$ref": "#/components/responses/Error"
           }
         },
+        "security": [
+          {
+            "Session": []
+          }
+        ],
         "summary": "UploadImage stores an image for an item."
       }
     },
@@ -581,6 +684,8 @@
             "name": "id",
             "required": true,
             "schema": {
+              "format": "itemID",
+              "pattern": "^(?:[0-9a-f]{8})$",
               "type": "string"
             }
           }
@@ -597,6 +702,12 @@
             },
             "description": "A file"
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
           "422": {
             "$ref": "#/components/responses/Invalid"
           },
@@ -604,6 +715,13 @@
             "$ref": "#/components/responses/Error"
           }
         },
+        "security": [
+          {
+            "Key": [
+              "items:read"
+            ]
+          }
+        ],
         "summary": "Sheet renders the data sheet of an item as PDF."
       }
     },
@@ -634,6 +752,12 @@
           "400": {
             "$ref": "#/components/responses/BadRequest"
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
           "422": {
             "$ref": "#/components/responses/Invalid"
           },
@@ -641,7 +765,59 @@
             "$ref": "#/components/responses/Error"
           }
         },
+        "security": [
+          {
+            "Session": [
+              "admin"
+            ]
+          }
+        ],
         "summary": "ReplaceSettings replaces the shop's settings."
+      }
+    },
+    "/api/stock/{kind}/{n}": {
+      "get": {
+        "operationId": "stockOf",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Kind"
+            }
+          },
+          {
+            "in": "path",
+            "name": "n",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "422": {
+            "$ref": "#/components/responses/Invalid"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [],
+        "summary": "StockOf returns how many items of a kind lie on shelf n."
       }
     },
     "/assets/{path}": {
@@ -676,6 +852,7 @@
             "$ref": "#/components/responses/Error"
           }
         },
+        "security": [],
         "summary": "ServeAsset serves a static file below /assets/."
       }
     }

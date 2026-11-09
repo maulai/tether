@@ -21,6 +21,16 @@
         },
         "description": "Any other error."
       },
+      "Forbidden": {
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        },
+        "description": "The credentials do not allow this request."
+      },
       "Invalid": {
         "content": {
           "application/problem+json": {
@@ -30,6 +40,16 @@
           }
         },
         "description": "The input failed validation; errors names the fields."
+      },
+      "Unauthorized": {
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        },
+        "description": "The request has no valid credentials."
       }
     },
     "schemas": {
@@ -56,6 +76,16 @@
       "Problem": {
         "description": "RFC 9457 problem details.",
         "properties": {
+          "code": {
+            "description": "The case of a problem the client can react to.",
+            "oneOf": [
+              {
+                "const": "noKey",
+                "description": "Status 401. ErrNoKey answers a change without a valid key. The client recognises it\nwith isNoKey."
+              }
+            ],
+            "type": "string"
+          },
           "detail": {
             "type": "string"
           },
@@ -64,6 +94,10 @@
               "$ref": "#/components/schemas/FieldError"
             },
             "type": "array"
+          },
+          "instance": {
+            "description": "Names a server error; the server's log has the same instance with the cause.",
+            "type": "string"
           },
           "status": {
             "type": "integer"
@@ -110,7 +144,8 @@
             ]
           },
           "id": {
-            "type": "string"
+            "format": "int64",
+            "type": "integer"
           },
           "reason": {
             "description": "Reason says why a blocked task cannot go on.",
@@ -199,6 +234,14 @@
         ],
         "type": "object"
       }
+    },
+    "securitySchemes": {
+      "APIKey": {
+        "description": "APIKey is the key a client sends in the X-API-Key header to change\ntasks. This example knows one key, demoKey; reading needs none.",
+        "in": "header",
+        "name": "X-API-Key",
+        "type": "apiKey"
+      }
     }
   },
   "info": {
@@ -254,6 +297,7 @@
             "$ref": "#/components/responses/Error"
           }
         },
+        "security": [],
         "summary": "ListTasks returns the tasks, oldest first."
       },
       "post": {
@@ -282,6 +326,12 @@
           "400": {
             "$ref": "#/components/responses/BadRequest"
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
           "422": {
             "$ref": "#/components/responses/Invalid"
           },
@@ -289,6 +339,11 @@
             "$ref": "#/components/responses/Error"
           }
         },
+        "security": [
+          {
+            "APIKey": []
+          }
+        ],
         "summary": "CreateTask adds a task."
       }
     },
@@ -314,6 +369,7 @@
             "$ref": "#/components/responses/Error"
           }
         },
+        "security": [],
         "summary": "ExportTasks returns all tasks as CSV."
       }
     },
@@ -356,6 +412,12 @@
           "400": {
             "$ref": "#/components/responses/BadRequest"
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
           "422": {
             "$ref": "#/components/responses/Invalid"
           },
@@ -363,6 +425,11 @@
             "$ref": "#/components/responses/Error"
           }
         },
+        "security": [
+          {
+            "APIKey": []
+          }
+        ],
         "summary": "ImportTasks adds a task for every line of an uploaded text file."
       }
     },
@@ -375,13 +442,20 @@
             "name": "id",
             "required": true,
             "schema": {
-              "type": "string"
+              "format": "int64",
+              "type": "integer"
             }
           }
         ],
         "responses": {
           "204": {
             "description": "No Content"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           },
           "422": {
             "$ref": "#/components/responses/Invalid"
@@ -390,6 +464,11 @@
             "$ref": "#/components/responses/Error"
           }
         },
+        "security": [
+          {
+            "APIKey": []
+          }
+        ],
         "summary": "DeleteTask removes a task."
       },
       "get": {
@@ -400,7 +479,8 @@
             "name": "id",
             "required": true,
             "schema": {
-              "type": "string"
+              "format": "int64",
+              "type": "integer"
             }
           }
         ],
@@ -422,6 +502,7 @@
             "$ref": "#/components/responses/Error"
           }
         },
+        "security": [],
         "summary": "GetTask returns one task."
       },
       "put": {
@@ -432,7 +513,8 @@
             "name": "id",
             "required": true,
             "schema": {
-              "type": "string"
+              "format": "int64",
+              "type": "integer"
             }
           }
         ],
@@ -460,6 +542,12 @@
           "400": {
             "$ref": "#/components/responses/BadRequest"
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
           "422": {
             "$ref": "#/components/responses/Invalid"
           },
@@ -467,6 +555,11 @@
             "$ref": "#/components/responses/Error"
           }
         },
+        "security": [
+          {
+            "APIKey": []
+          }
+        ],
         "summary": "UpdateTask replaces a task's fields."
       }
     }

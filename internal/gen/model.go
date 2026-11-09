@@ -24,6 +24,10 @@ type tsType struct {
 	enum    *enumDef   // enum, and the key type of a record with enum keys
 	param   string     // type parameter name
 	intKind string     // integer: the Go type, for range checks
+	// text names a type that reads itself with UnmarshalText, and format
+	// the rule its tether.Format registered; empty when it has none.
+	text   string
+	format string
 }
 
 type kind int
@@ -115,9 +119,15 @@ type model struct {
 	noEnum  map[*types.TypeName]bool
 	names   map[string]token.Pos // TypeScript names in use, for collisions
 	textM   *types.Interface
+	textU   *types.Interface
 	jsonM   *types.Interface
 	inTypes map[*route]*tsType
 	outType map[*route]*tsType
+	// pathTypes holds the types of each route's path parameters.
+	pathTypes map[*route][]*tsType
+	// anyAuth is set when a route needs an Auth: then every route says who
+	// may call it, and the OpenAPI document lists the schemes.
+	anyAuth bool
 	// validates holds, per package, the types it passes to tether.Validate.
 	validates map[*types.Package][]*tsType
 	// registers lists, per handler package, the enums its handlers' inputs
@@ -135,12 +145,40 @@ func newModel(p *program, qualify bool) *model {
 		noEnum:    map[*types.TypeName]bool{},
 		names:     map[string]token.Pos{},
 		textM:     method("MarshalText"),
+		textU:     unmarshalText(),
 		jsonM:     method("MarshalJSON"),
 		inTypes:   map[*route]*tsType{},
 		outType:   map[*route]*tsType{},
+		pathTypes: map[*route][]*tsType{},
+	}
+	for _, r := range p.routes {
+		if r.access.auth != nil {
+			m.anyAuth = true
+		}
 	}
 	for _, r := range p.routes {
 		where := r.handler.Name()
+		m.pos = r.handler.Pos()
+		if m.anyAuth && r.access.auth == nil && !r.access.public {
+			m.errorf(r.handler.Pos(), "%s %s: say who may call it, with Auth or Public in tether.Options; other routes need an Auth", r.method, r.path)
+		}
+		for _, pp := range r.params {
+			m.pos = pp.pos
+			t := m.typ(pp.typ, where+" {"+pp.name+"}")
+			m.pathTypes[r] = append(m.pathTypes[r], t)
+			m.mark(t, true, map[*structDef]bool{})
+			switch t.kind {
+			case kString, kEnum, kInteger, kNumber, kBoolean, kDatetime:
+				if pp.wildcard && t.kind != kEnum && (t.kind != kString || t.text != "") {
+					m.errorf(pp.pos, "%s: {%s...} is the rest of the path and must be a string", r.handler.Name(), pp.name)
+				}
+				if t.text != "" && t.format == "" {
+					m.errorf(pp.pos, "%s {%s}: %s", r.handler.Name(), pp.name, noFormat(t.text))
+				}
+			default:
+				m.errorf(pp.pos, "%s: path parameter {%s} cannot be read into %s; a path parameter is a string, number, boolean, enum, time.Time or a type with UnmarshalText", r.handler.Name(), pp.name, pp.typ)
+			}
+		}
 		m.pos = r.handler.Pos()
 		if r.in != nil && !r.upload {
 			t := m.typ(r.in, where)
@@ -195,6 +233,16 @@ func (m *model) planRegistrations() {
 			where[pkg] = r.handler.Pos()
 		}
 		collectEnums(t, need[pkg], map[*structDef]bool{})
+	}
+	for _, r := range m.routes {
+		pkg := r.handler.Pkg()
+		for _, t := range m.pathTypes[r] {
+			if need[pkg] == nil {
+				need[pkg] = map[*enumDef]bool{}
+				where[pkg] = r.handler.Pos()
+			}
+			collectEnums(t, need[pkg], map[*structDef]bool{})
+		}
 	}
 	for pkg, list := range m.validates {
 		if need[pkg] == nil {
@@ -274,6 +322,21 @@ func (m *model) errorf(pos token.Pos, format string, args ...any) {
 	m.program.errorf(pos, format, args...)
 }
 
+func noFormat(text string) string {
+	return text + " reads itself with UnmarshalText; register its text form with tether.Format, so the browser checks it as the server does"
+}
+
+// unmarshalText builds the interface UnmarshalText([]byte) error.
+func unmarshalText() *types.Interface {
+	bytes := types.NewSlice(types.Typ[types.Byte])
+	errType := types.Universe.Lookup("error").Type()
+	sig := types.NewSignatureType(nil, nil, nil,
+		types.NewTuple(types.NewVar(token.NoPos, nil, "", bytes)), types.NewTuple(types.NewVar(token.NoPos, nil, "", errType)), false)
+	iface := types.NewInterfaceType([]*types.Func{types.NewFunc(token.NoPos, nil, "UnmarshalText", sig)}, nil)
+	iface.Complete()
+	return iface
+}
+
 // method builds the interface with one method name() ([]byte, error).
 func method(name string) *types.Interface {
 	bytes := types.NewSlice(types.Typ[types.Byte])
@@ -323,8 +386,12 @@ func (m *model) typ(t types.Type, at string) *tsType {
 		case path == tetherPath && (obj.Name() == "File" || obj.Name() == "Upload"):
 			m.errorf(obj.Pos(), "%s: tether.%s can only be the whole input or output of a handler", at, obj.Name())
 			return &tsType{kind: kUnknown}
-		case m.implements(x, m.textM):
-			return &tsType{kind: kString}
+		case m.implements(x, m.textM) || m.implements(x, m.textU):
+			t := &tsType{kind: kString, format: m.formats[obj]}
+			if m.implements(x, m.textU) {
+				t.text = obj.Pkg().Name() + "." + obj.Name()
+			}
+			return t
 		case m.implements(x, m.jsonM):
 			m.errorf(token.NoPos, "%s: %s has its own MarshalJSON, so tether cannot know its JSON shape; use a plain type in the API", at, x)
 			return &tsType{kind: kUnknown}
@@ -613,6 +680,11 @@ func (m *model) checkInputs() {
 					if !queryable(f.typ) {
 						m.errorf(f.pos, "%s.%s: a query parameter must be a scalar or a list of scalars", t.def.name, f.name)
 					}
+					for _, pp := range r.params {
+						if pp.name == f.name {
+							m.errorf(f.pos, "%s.%s: the query parameter has the name of the path parameter {%s} of %s %s; rename one", t.def.name, f.name, pp.name, r.method, r.path)
+						}
+					}
 				}
 			}
 		}
@@ -623,6 +695,25 @@ func (m *model) checkInputs() {
 			continue
 		}
 		m.checkDef(d)
+		if d.in {
+			m.checkFormats(d)
+		}
+	}
+}
+
+// checkFormats reports a field of a route's input whose type reads itself
+// with UnmarshalText but has no Format: the browser could not check it, and
+// would let through what the server rejects.
+func (m *model) checkFormats(d *structDef) {
+	for _, f := range d.fields {
+		for t := f.typ; t != nil; t = t.elem {
+			if t.kind == kObject {
+				m.checkFormats(t.def)
+			}
+			if t.text != "" && t.format == "" {
+				m.errorf(f.pos, "%s.%s: %s", d.name, f.name, noFormat(t.text))
+			}
+		}
 	}
 }
 
@@ -800,6 +891,16 @@ func (m *model) checkNames() {
 		claim(e.name, qualified(e.obj), e.obj.Pos(), true)
 		claim(valuesName(e), qualified(e.obj)+" (values)", e.obj.Pos(), false)
 	}
+	for _, pd := range m.sortedProblems() {
+		claim(guardName(pd.code), "problem "+pd.code, pd.pos, false)
+	}
+	schemes := map[string]*authDef{}
+	for _, a := range m.sortedAuths() {
+		if prev, ok := schemes[a.name]; ok {
+			m.errorf(a.pos, "two Auth variables are named %s, also at %s; rename one, the name names it in OpenAPI", a.name, m.fset.Position(prev.pos))
+		}
+		schemes[a.name] = a
+	}
 	for _, r := range m.routes {
 		what := fmt.Sprintf("handler %s", qualifiedFunc(r.handler))
 		claim(r.name, what, r.handler.Pos(), false)
@@ -854,7 +955,50 @@ func qualifiedFunc(fn *types.Func) string {
 }
 
 func schemaName(d *structDef) string { return lowerCamel(d.name) + "Schema" }
-func valuesName(e *enumDef) string   { return lowerCamel(e.name) + "Values" }
+
+// guardName is the TypeScript function that recognises a problem:
+// mfaRequired becomes isMfaRequired.
+func guardName(code string) string {
+	r, size := utf8.DecodeRuneInString(code)
+	return "is" + string(unicode.ToUpper(r)) + code[size:]
+}
+
+func (m *model) codes() []string {
+	var out []string
+	for _, pd := range m.sortedProblems() {
+		out = append(out, pd.code)
+	}
+	return out
+}
+
+func (m *model) sortedProblems() []*problemDef {
+	var out []*problemDef
+	for _, pd := range m.problems {
+		out = append(out, pd)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].code < out[j].code })
+	return out
+}
+
+// sortedAuths lists the Auths that routes use, by name.
+func (m *model) sortedAuths() []*authDef {
+	seen := map[*authDef]bool{}
+	var out []*authDef
+	for _, r := range m.routes {
+		if a := r.access.auth; a != nil && !seen[a] {
+			seen[a] = true
+			out = append(out, a)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].name != out[j].name {
+			return out[i].name < out[j].name
+		}
+		return out[i].pos < out[j].pos
+	})
+	return out
+}
+func valuesName(e *enumDef) string { return lowerCamel(e.name) + "Values" }
 
 var reserved = map[string]bool{}
 

@@ -19,8 +19,11 @@ type color string
 
 type vectors struct {
 	Patterns map[string]struct{ Go, JS, Message string } `json:"patterns"`
-	Checks   []string                                    `json:"checks"`
-	Cases    []vectorCase                                `json:"cases"`
+	// Formats bind a pattern to a vector type; the Go side has one such
+	// type, code.
+	Formats map[string]struct{ Type, Go, JS, Message string } `json:"formats"`
+	Checks  []string                                          `json:"checks"`
+	Cases   []vectorCase                                      `json:"cases"`
 }
 
 type vectorCase struct {
@@ -72,6 +75,12 @@ func TestMain(m *testing.M) {
 	for name, p := range v.Patterns {
 		Pattern(name, p.Go, p.Message)
 	}
+	for name, f := range v.Formats {
+		if f.Type != "code" {
+			panic("a format needs the vector type code, not " + f.Type)
+		}
+		Format[code](name, f.Go, f.Message)
+	}
 	for _, name := range v.Checks {
 		Check(name, func(s string) bool { return len(s)%2 == 0 }, "Needs an even length.")
 	}
@@ -121,7 +130,15 @@ func TestConformance(t *testing.T) {
 // vectors use, so the TypeScript side tests the translation tether really
 // produces.
 func TestConformancePatterns(t *testing.T) {
-	for name, p := range loadVectors(t).Patterns {
+	v := loadVectors(t)
+	all := map[string]struct{ Go, JS string }{}
+	for name, p := range v.Patterns {
+		all[name] = struct{ Go, JS string }{p.Go, p.JS}
+	}
+	for name, f := range v.Formats {
+		all[name] = struct{ Go, JS string }{f.Go, f.JS}
+	}
+	for name, p := range all {
 		js, err := jsregex.Translate(p.Go)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
@@ -178,6 +195,12 @@ func vectorGoType(f vectorField) reflect.Type {
 		return reflect.TypeFor[map[color]string]()
 	case "[]byte":
 		return reflect.TypeFor[[]byte]()
+	case "code":
+		return reflect.TypeFor[code]()
+	case "*code":
+		return reflect.TypeFor[*code]()
+	case "[]code":
+		return reflect.TypeFor[[]code]()
 	case "object":
 		return vectorType(f.Fields)
 	case "[]object":
