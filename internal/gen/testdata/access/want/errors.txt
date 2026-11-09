@@ -1,10 +1,18 @@
-9 problem(s):
+17 problem(s):
   internal/gen/testdata/access/access.go:17:12: Both: an Auth names exactly one of Cookie, Header and Bearer
   internal/gen/testdata/access/access.go:22:6: GET /open: say who may call it, with Auth or Public in tether.Options; other routes need an Auth
   internal/gen/testdata/access/access.go:24:6: GET /scoped: say who may call it, with Auth or Public in tether.Options; other routes need an Auth
   internal/gen/testdata/access/access.go:25:6: GET /inline: say who may call it, with Auth or Public in tether.Options; other routes need an Auth
   internal/gen/testdata/access/access.go:26:6: GET /called: say who may call it, with Auth or Public in tether.Options; other routes need an Auth
-  internal/gen/testdata/access/access.go:32:47: a route is either Public or has an Auth, not both
-  internal/gen/testdata/access/access.go:33:49: Scopes need an Auth that checks them
-  internal/gen/testdata/access/access.go:34:70: declare the Auth as a package variable and name it here; its name names it in OpenAPI
-  internal/gen/testdata/access/access.go:35:49: the Options must be a tether.Options literal or a package variable initialised with one, so tether can read them
+  internal/gen/testdata/access/access.go:34:6: GET /loose: say who may call it, with Auth or Public in tether.Options; other routes need an Auth
+  internal/gen/testdata/access/access.go:51:47: a route is either Public or has an Auth, not both
+  internal/gen/testdata/access/access.go:52:49: Scopes need an Auth that checks them
+  internal/gen/testdata/access/access.go:53:70: declare the Auth as a package variable and name it here; its name names it in OpenAPI
+  internal/gen/testdata/access/access.go:54:49: the Options must be a tether.Options literal or a package variable initialised with one, so tether can read them
+  internal/gen/testdata/access/access.go:57:67: Auths are alternatives and need two or more; for one way in, use Auth
+  internal/gen/testdata/access/access.go:58:88: Auths names Key twice
+  internal/gen/testdata/access/access.go:59:92: Session and Other both read the cookie session; tether could not tell which one a request carries
+  internal/gen/testdata/access/access.go:60:90: Key and Raw both read the header Authorization; tether could not tell which one a request carries
+  internal/gen/testdata/access/access.go:61:45: a route has an Auth or Auths, not both
+  internal/gen/testdata/access/access.go:62:69: Auths must be a []tether.Auth literal, so tether can read them
+  internal/gen/testdata/access/access.go:63:45: a route is either Public or has an Auth, not both

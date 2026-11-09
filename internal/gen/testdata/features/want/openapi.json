@@ -809,6 +809,12 @@
             },
             "description": "OK"
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
           "422": {
             "$ref": "#/components/responses/Invalid"
           },
@@ -816,7 +822,18 @@
             "$ref": "#/components/responses/Error"
           }
         },
-        "security": [],
+        "security": [
+          {
+            "Session": [
+              "stock:read"
+            ]
+          },
+          {
+            "Key": [
+              "stock:read"
+            ]
+          }
+        ],
         "summary": "StockOf returns how many items of a kind lie on shelf n."
       }
     },

@@ -465,12 +465,14 @@ var (
 	signedIn = tether.Options{Auth: Session}
 	admin    = tether.Options{Auth: Session, Scopes: []string{"admin"}}
 	ingest   = tether.Options{Auth: APIKey, Scopes: []string{"documents:write"}}
+	reader   = tether.Options{Auths: []tether.Auth{Session, APIKey}, Scopes: []string{"catalog:read"}}
 )
 
 mux.Handle(tether.Route("POST /v1/login", Login, open))
 mux.Handle(tether.Route("GET /v1/me", GetMe, signedIn))
 mux.Handle(tether.Route("POST /v1/categories", CreateCategory, admin))
 mux.Handle(tether.Route("POST /v1/ingest/documents", CreateIngestDocuments, ingest))
+mux.Handle(tether.Route("GET /v1/products", ListProducts, reader))
 ```
 
 ```go
@@ -482,7 +484,8 @@ type Auth struct {
 }
 
 type Options struct {
-	Auth   Auth
+	Auth   Auth   // the one way in
+	Auths  []Auth // or several, for browsers and other systems alike
 	Scopes []string
 	Public bool
 }
@@ -502,15 +505,33 @@ type Options struct {
   doc comment, every route lists its security and the answers 401 and 403.
   A route cannot be documented as protected and served open.
 - **Every route says it.** Once one route of a program has an `Auth`,
-  every route has `Auth` or `Public`; a route without either is an error
-  when generating. The route list is then the access table of the API.
+  every route has `Auth`, `Auths` or `Public`; a route without one is an
+  error when generating. The route list is then the access table of the
+  API.
+- **Several ways in.** A route that browsers and other systems call alike
+  lists its alternatives in `Auths`, in order. tether calls the check of
+  the first whose credential the request carries: the cookie of that name
+  with a value, the header of that name with a value, or `Authorization`
+  with the scheme `Bearer` (any case) and a token. A request that carries
+  none hears from the first check, so the project answers with its own
+  problem. A check that fails is the answer: tether does not try the next,
+  so a stale cookie never falls through to a key, and the way in that was
+  checked is always the one the request chose. tether only looks where a
+  credential is; whether it is good is the check's.
+- The scopes are the route's, the same for every alternative; each check
+  enforces them in its own terms, roles of a session or scopes of a key,
+  since OpenAPI lists them with each. A cross-site request forged in a
+  browser carries only the cookie, never a header it would need a
+  preflight for, so it always reaches the session's check, whatever the
+  order.
 - An `Auth` names exactly one of `Cookie`, `Header` and `Bearer`, and has a
-  `Check`. `Public` and `Auth` exclude each other; `Scopes` need an `Auth`.
-  `Route` panics for these mistakes, the generator reports them.
+  `Check`. `Public`, `Auth` and `Auths` exclude each other; `Auths` has two
+  or more, each read from its own place (a bearer token travels in the
+  `Authorization` header); `Scopes` need an `Auth`. `Route` panics for
+  these mistakes, the generator reports them.
 - `Options` are written in the call or as package variables initialised
-  with a literal, and an `Auth` is a package variable, so the generator can
-  read them. A route has one way in: a browser session and a key of
-  another system are separate routes.
+  with a literal, `Auths` as a literal of package variables, and an `Auth`
+  is a package variable, so the generator can read them.
 - Middleware that answers by itself, a rate limit or a CSRF check, still
   answers with `WriteError`; what depends on the caller's identity, such as
   choosing a tenant's database, belongs in the check.
@@ -784,8 +805,9 @@ One OpenAPI 3.1 document for all routes:
   the problem response for `400` and `422`.
 - With an `Auth` (3.9): `securitySchemes` named like the variables, an
   `apiKey` in a cookie or header or `http` bearer, described by their doc
-  comments; every operation has `security`, `[]` for a public one, and a
-  protected one lists `401` and `403`.
+  comments; every operation has `security`, `[]` for a public one and one
+  requirement per alternative of `Auths`, and a protected one lists `401`
+  and `403`.
 - The `Problem` schema lists every declared code with its status and text,
   and `instance`.
 - Rules become the matching JSON Schema keywords (`minLength`, `maximum`,
@@ -817,7 +839,8 @@ export function updateTask(id: number, input: TaskInput, options?: RequestOption
 - A path parameter has the type of its Go argument: `number`, an enum,
   `boolean` or `string`.
 - With an `Auth` in the program, the doc comment says who may call the
-  route: `Access: Session, with admin.`
+  route: `Access: Session, with admin.`, `Access: Session or APIKey, with
+  catalog:read.`, `Access: public.`
 
 - The input parameter is optional if the input type has no required field.
   The input type of a `PUT` route has every field required (6.1), so the

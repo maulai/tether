@@ -152,14 +152,14 @@ func newModel(p *program, qualify bool) *model {
 		pathTypes: map[*route][]*tsType{},
 	}
 	for _, r := range p.routes {
-		if r.access.auth != nil {
+		if len(r.access.auths) > 0 {
 			m.anyAuth = true
 		}
 	}
 	for _, r := range p.routes {
 		where := r.handler.Name()
 		m.pos = r.handler.Pos()
-		if m.anyAuth && r.access.auth == nil && !r.access.public {
+		if m.anyAuth && len(r.access.auths) == 0 && !r.access.public {
 			m.errorf(r.handler.Pos(), "%s %s: say who may call it, with Auth or Public in tether.Options; other routes need an Auth", r.method, r.path)
 		}
 		for _, pp := range r.params {
@@ -985,9 +985,11 @@ func (m *model) sortedAuths() []*authDef {
 	seen := map[*authDef]bool{}
 	var out []*authDef
 	for _, r := range m.routes {
-		if a := r.access.auth; a != nil && !seen[a] {
-			seen[a] = true
-			out = append(out, a)
+		for _, a := range r.access.auths {
+			if !seen[a] {
+				seen[a] = true
+				out = append(out, a)
+			}
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {

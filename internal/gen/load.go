@@ -8,6 +8,7 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
+	"net/textproto"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -68,9 +69,22 @@ type authDef struct {
 	pos    token.Pos
 }
 
+// carrier names where the credential of a travels, to tell two Auths of
+// one route apart; it matches the text of tether's own check.
+func (a *authDef) carrier() string {
+	if a.cookie != "" {
+		return "the cookie " + a.cookie
+	}
+	name := "Authorization"
+	if a.header != "" {
+		name = textproto.CanonicalMIMEHeaderKey(a.header)
+	}
+	return "the header " + name
+}
+
 // access is what a route's Options say about who may call it.
 type access struct {
-	auth   *authDef // nil without one
+	auths  []*authDef // the ways in, in order; none for a public route
 	scopes []string
 	public bool
 }
@@ -466,6 +480,8 @@ func (p *program) options(info *types.Info, call *ast.CallExpr) access {
 		p.errorf(call.Args[2].Pos(), "the Options must be a tether.Options literal or a package variable initialised with one, so tether can read them")
 		return a
 	}
+	var one ast.Expr  // the Auth field
+	var many ast.Expr // the Auths field
 	for _, el := range lit.Elts {
 		kv, ok := el.(*ast.KeyValueExpr)
 		key, _ := kv.Key.(*ast.Ident)
@@ -475,7 +491,13 @@ func (p *program) options(info *types.Info, call *ast.CallExpr) access {
 		}
 		switch key.Name {
 		case "Auth":
-			a.auth = p.auth(linfo, kv.Value)
+			one = kv.Value
+			if auth := p.auth(linfo, kv.Value); auth != nil {
+				a.auths = append(a.auths, auth)
+			}
+		case "Auths":
+			many = kv.Value
+			a.auths = append(a.auths, p.authList(linfo, kv.Value)...)
 		case "Scopes":
 			a.scopes = p.stringList(linfo, kv.Value)
 		case "Public":
@@ -488,12 +510,47 @@ func (p *program) options(info *types.Info, call *ast.CallExpr) access {
 		}
 	}
 	switch {
-	case a.public && a.auth != nil:
+	case one != nil && many != nil:
+		p.errorf(lit.Pos(), "a route has an Auth or Auths, not both")
+	case a.public && (one != nil || many != nil):
 		p.errorf(lit.Pos(), "a route is either Public or has an Auth, not both")
-	case len(a.scopes) > 0 && a.auth == nil:
+	case len(a.scopes) > 0 && one == nil && many == nil:
 		p.errorf(lit.Pos(), "Scopes need an Auth that checks them")
 	}
 	return a
+}
+
+// authList reads the alternatives of Auths: two or more package variables,
+// each read from a place of its own, since the credential a request
+// carries picks the one tether checks.
+func (p *program) authList(info *types.Info, e ast.Expr) []*authDef {
+	lit, ok := ast.Unparen(e).(*ast.CompositeLit)
+	if !ok {
+		p.errorf(e.Pos(), "Auths must be a []tether.Auth literal, so tether can read them")
+		return nil
+	}
+	if len(lit.Elts) < 2 {
+		p.errorf(lit.Pos(), "Auths are alternatives and need two or more; for one way in, use Auth")
+	}
+	var out []*authDef
+	for _, el := range lit.Elts {
+		a := p.auth(info, el)
+		if a == nil {
+			continue
+		}
+		for _, prev := range out {
+			if prev == a {
+				p.errorf(el.Pos(), "Auths names %s twice", a.name)
+				break
+			}
+			if prev.carrier() == a.carrier() {
+				p.errorf(el.Pos(), "%s and %s both read %s; tether could not tell which one a request carries", prev.name, a.name, a.carrier())
+				break
+			}
+		}
+		out = append(out, a)
+	}
+	return out
 }
 
 // literal finds the composite literal of the tether type name that e is or

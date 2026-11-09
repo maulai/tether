@@ -322,15 +322,24 @@ func (m *model) renderRoute(b *strings.Builder, r *route, used map[string]bool) 
 	}
 }
 
-// accessText says who may call a route, for its doc comment.
+// accessText says who may call a route, for its doc comment: "Session.",
+// "Session or Key, with items:read.", "public.".
 func accessText(a access) string {
-	switch {
-	case a.auth == nil:
+	if len(a.auths) == 0 {
 		return "public."
-	case len(a.scopes) > 0:
-		return a.auth.name + ", with " + strings.Join(a.scopes, ", ") + "."
 	}
-	return a.auth.name + "."
+	names := make([]string, len(a.auths))
+	for i, auth := range a.auths {
+		names[i] = auth.name
+	}
+	text := names[len(names)-1]
+	if len(names) > 1 {
+		text = strings.Join(names[:len(names)-1], ", ") + " or " + text
+	}
+	if len(a.scopes) > 0 {
+		text += ", with " + strings.Join(a.scopes, ", ")
+	}
+	return text + "."
 }
 
 // enumList is the expression for all valid values of an enum, "" included

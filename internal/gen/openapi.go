@@ -178,12 +178,18 @@ func (o *openAPI) operation(r *route) obj {
 	}
 	if o.m.anyAuth {
 		switch a := r.access; {
-		case a.auth != nil:
+		case len(a.auths) > 0:
 			scopes := a.scopes
 			if scopes == nil {
 				scopes = []string{}
 			}
-			op["security"] = []any{obj{a.auth.name: scopes}}
+			// One requirement per way in: OpenAPI reads the list as
+			// alternatives, each with the route's scopes.
+			security := []any{}
+			for _, auth := range a.auths {
+				security = append(security, obj{auth.name: scopes})
+			}
+			op["security"] = security
 			responses["401"] = obj{"$ref": "#/components/responses/Unauthorized"}
 			responses["403"] = obj{"$ref": "#/components/responses/Forbidden"}
 		default:

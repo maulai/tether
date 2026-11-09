@@ -84,7 +84,7 @@ type handler struct {
 	query  bool // the input comes from the query string
 	out    bool // the handler returns a value besides the error
 	file   bool
-	auth   *Auth // nil for a route anyone may call
+	auths  []Auth // none for a route anyone may call
 	scopes []string
 }
 
@@ -108,9 +108,8 @@ func newHandler(pattern string, fn any, o Options) (*handler, error) {
 	}
 	t := v.Type()
 	h := &handler{method: method, fn: v, query: method == http.MethodGet || method == http.MethodDelete, params: patternParams(path)}
-	if o.Auth.set() {
-		auth := o.Auth
-		h.auth, h.scopes = &auth, slices.Clone(o.Scopes)
+	if auths := o.auths(); len(auths) > 0 {
+		h.auths, h.scopes = slices.Clone(auths), slices.Clone(o.Scopes)
 	}
 	if t.IsVariadic() || t.NumIn() < 1 || t.In(0) != requestType {
 		return nil, fmt.Errorf("the handler must have the shape %s", shape)
@@ -200,8 +199,15 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		internal(w, r, err)
 	}()
 
-	if h.auth != nil {
-		checked, err := h.auth.Check(r, slices.Clone(h.scopes))
+	if len(h.auths) > 0 {
+		auth := h.auths[0] // a request without credentials hears from the first
+		for _, a := range h.auths {
+			if a.carried(r) {
+				auth = a
+				break
+			}
+		}
+		checked, err := auth.Check(r, slices.Clone(h.scopes))
 		if err != nil {
 			WriteError(w, r, err)
 			return

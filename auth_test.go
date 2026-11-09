@@ -74,18 +74,95 @@ func TestAuth(t *testing.T) {
 	}
 }
 
+// With Auths, the credential the request carries picks the Check, in the
+// order of the list; a request without one hears from the first Check, and
+// a Check that fails is the answer, without a second try.
+func TestAuths(t *testing.T) {
+	var seen []string // the scopes each Check was handed
+	who := func(prefix string, value func(*http.Request) string) Auth {
+		return Auth{Check: func(r *http.Request, scopes []string) (*http.Request, error) {
+			seen = append(seen, prefix+strings.Join(scopes, ","))
+			v := value(r)
+			switch v {
+			case "":
+				return nil, errSignedOut
+			case "bad":
+				return nil, Fail(http.StatusUnauthorized, "Not a "+prefix)
+			}
+			return r.WithContext(context.WithValue(r.Context(), accountKey{}, prefix+v)), nil
+		}}
+	}
+	cookie := who("cookie ", func(r *http.Request) string {
+		c, err := r.Cookie("sid")
+		if err != nil {
+			return ""
+		}
+		return c.Value
+	})
+	cookie.Cookie = "sid"
+	bearer := who("key ", func(r *http.Request) string { return strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ") })
+	bearer.Bearer = true
+	reader := Options{Auths: []Auth{cookie, bearer}, Scopes: []string{"read"}}
+
+	cases := []struct {
+		name          string
+		cookie, authz string
+		status        int
+		body          string
+	}{
+		{"none", "", "", 401, "Please sign in."},
+		{"cookie", "ann", "", 201, `"cookie ann:a"`},
+		{"key", "", "Bearer k1", 201, `"key k1:a"`},
+		{"lowercase scheme", "", "bearer k1", 201, `"key bearer k1:a"`},
+		{"both, first wins", "ann", "Bearer k1", 201, `"cookie ann:a"`},
+		{"failed cookie, no second try", "bad", "Bearer k1", 401, "Not a cookie"},
+		{"empty cookie", " ", "Bearer k1", 201, `"key k1:a"`},
+		{"basic is no bearer", "", "Basic YTpi", 401, "Please sign in."},
+		{"bearer without token", "", "Bearer ", 401, "Please sign in."},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			seen = nil
+			r := httptest.NewRequest("POST", "/me", strings.NewReader(`{"title": "a"}`))
+			if c.cookie != "" {
+				r.Header.Set("Cookie", "sid="+strings.TrimSpace(c.cookie))
+			}
+			if c.authz != "" {
+				r.Header.Set("Authorization", c.authz)
+			}
+			mux := http.NewServeMux()
+			mux.Handle(Route("POST /me", whoAmI, reader))
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, r)
+			if rec.Code != c.status || !strings.Contains(rec.Body.String(), c.body) {
+				t.Errorf("status %d, body %s; want %d with %s", rec.Code, rec.Body, c.status, c.body)
+			}
+			if len(seen) != 1 || !strings.HasSuffix(seen[0], " read") {
+				t.Errorf("checks called: %q, want one with the scopes", seen)
+			}
+		})
+	}
+}
+
 func TestOptionsMistakes(t *testing.T) {
 	check := func(r *http.Request, _ []string) (*http.Request, error) { return r, nil }
 	cases := map[string]struct {
 		opts []Options
 		want string
 	}{
-		"two":           {[]Options{{}, {}}, "at most one Options"},
-		"public auth":   {[]Options{{Public: true, Auth: Auth{Bearer: true, Check: check}}}, "either Public or has an Auth"},
-		"scopes":        {[]Options{{Scopes: []string{"admin"}}}, "Scopes need an Auth"},
-		"two carriers":  {[]Options{{Auth: Auth{Bearer: true, Header: "X-Key", Check: check}}}, "exactly one of Cookie, Header and Bearer"},
-		"no carrier":    {[]Options{{Auth: Auth{Check: check}}}, "exactly one of Cookie, Header and Bearer"},
-		"without check": {[]Options{{Auth: Auth{Cookie: "session"}}}, "needs a Check"},
+		"two":            {[]Options{{}, {}}, "at most one Options"},
+		"public auth":    {[]Options{{Public: true, Auth: Auth{Bearer: true, Check: check}}}, "either Public or has an Auth"},
+		"scopes":         {[]Options{{Scopes: []string{"admin"}}}, "Scopes need an Auth"},
+		"two carriers":   {[]Options{{Auth: Auth{Bearer: true, Header: "X-Key", Check: check}}}, "exactly one of Cookie, Header and Bearer"},
+		"no carrier":     {[]Options{{Auth: Auth{Check: check}}}, "exactly one of Cookie, Header and Bearer"},
+		"without check":  {[]Options{{Auth: Auth{Cookie: "session"}}}, "needs a Check"},
+		"auth and auths": {[]Options{{Auth: Auth{Bearer: true, Check: check}, Auths: []Auth{{Cookie: "a", Check: check}, {Cookie: "b", Check: check}}}}, "an Auth or Auths, not both"},
+		"one of auths":   {[]Options{{Auths: []Auth{{Cookie: "a", Check: check}}}}, "two or more; for one way in, use Auth"},
+		"public auths":   {[]Options{{Public: true, Auths: []Auth{{Cookie: "a", Check: check}, {Cookie: "b", Check: check}}}}, "either Public or has an Auth"},
+		"same cookie":    {[]Options{{Auths: []Auth{{Cookie: "a", Check: check}, {Cookie: "a", Check: check}}}}, "two Auths read the cookie a"},
+		"same header":    {[]Options{{Auths: []Auth{{Header: "x-key", Check: check}, {Header: "X-Key", Check: check}}}}, "two Auths read the header X-Key"},
+		"bearer header":  {[]Options{{Auths: []Auth{{Bearer: true, Check: check}, {Header: "authorization", Check: check}}}}, "two Auths read the header Authorization"},
+		"bad of auths":   {[]Options{{Auths: []Auth{{Cookie: "a", Check: check}, {Cookie: "b"}}}}, "needs a Check"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

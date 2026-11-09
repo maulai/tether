@@ -198,6 +198,6 @@ func Routes(mux *http.ServeMux) {
 	mux.Handle(tether.Route("GET /api/items/{id}/sheet", Sheet, tether.Options{Auth: Key, Scopes: []string{"items:read"}}))
 	mux.Handle(tether.Route("GET /assets/{path...}", ServeAsset, open))
 	mux.Handle(tether.Route("PATCH /api/items/{id}/archive", Archive, admin))
-	mux.Handle(tether.Route("GET /api/stock/{kind}/{n}", StockOf, open))
+	mux.Handle(tether.Route("GET /api/stock/{kind}/{n}", StockOf, tether.Options{Auths: []tether.Auth{Session, Key}, Scopes: []string{"stock:read"}}))
 	mux.Handle(tether.Route("PUT /api/settings", ReplaceSettings, admin))
 }

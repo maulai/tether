@@ -216,8 +216,19 @@ func checkSession(r *http.Request, scopes []string) (*http.Request, error) {
 
 tether calls the check before it reads the input, and the OpenAPI document
 lists the schemes and every route's security, so documentation and check
-cannot drift. Once one route has an `Auth`, every route says `Auth` or
-`Public`; a forgotten one is an error when generating.
+cannot drift. Once one route has an `Auth`, every route says `Auth`,
+`Auths` or `Public`; a forgotten one is an error when generating.
+
+A route that browsers and other systems call alike has several ways in.
+tether calls the check of the first whose credential the request carries;
+one that fails is the answer, without a second try:
+
+```go
+// APIKey is the key of another system.
+var APIKey = tether.Auth{Bearer: true, Check: checkKey}
+
+var reader = tether.Options{Auths: []tether.Auth{Session, APIKey}, Scopes: []string{"catalog:read"}}
+```
 
 ## Generate
 

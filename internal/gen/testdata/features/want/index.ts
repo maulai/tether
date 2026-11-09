@@ -219,7 +219,7 @@ export function replaceSettings(input: Settings, options?: RequestOptions): Prom
  *
  * GET /api/stock/{kind}/{n}
  *
- * Access: public.
+ * Access: Session or Key, with stock:read.
  */
 export function stockOf(kind: Kind, n: number, options?: RequestOptions): Promise<number> {
   return call<number>("GET", `/api/stock/${encodeURIComponent(kind)}/${encodeURIComponent(n)}`, {}, options, "json");
