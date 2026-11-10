@@ -308,11 +308,14 @@ Rules go in the `v` tag, separated by commas.
 | Rule | Meaning |
 |---|---|
 | `required` | not empty; text that is only whitespace counts as empty |
-| `requiredif=field:value`, `forbiddenif=field:value` | required or forbidden when a sibling has a value; `!value` negates, an empty value means "is empty" |
+| `requiredif=field:value`, `forbiddenif=field:value` | required or forbidden when another field has a value; `!value` negates, an empty value means "is empty"; `field` may be a path into a struct, `target.purpose` |
 | `min=N`, `max=N` | length of text, entries of a list, or value of a number |
 | `gt=N`, `lt=N` | exclusive bounds for numbers |
+| `minfield=f`, `maxfield=f`, `gtfield=f`, `ltfield=f` | the same bounds, set by another field: `To time.Time` with `minfield=from` |
 | `email`, `url` | an email address; an `http` or `https` address |
 | `oneof=a b c` | one of the listed values |
+| `unique`, `unique=sku` | no element of a list repeats an earlier one, or its field `sku`; the repetition is reported at its own path |
+| `requiredkeys=de en` | a map has these keys, each with content |
 | `dive` | the rules after it apply to each element of a list or map |
 
 Always checked, without a tag: a field of an enum type takes only its values;

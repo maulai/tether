@@ -146,6 +146,18 @@ var Builtin = map[string]bool{
 	"required": true, "requiredif": true, "forbiddenif": true,
 	"min": true, "max": true, "gt": true, "lt": true,
 	"email": true, "url": true, "oneof": true,
+	"unique": true, "requiredkeys": true,
+	"minfield": true, "maxfield": true, "gtfield": true, "ltfield": true,
+}
+
+// Compare lists the rules that compare a value with another field, and the
+// rule each one is the counterpart of.
+var Compare = map[string]string{"minfield": "min", "maxfield": "max", "gtfield": "gt", "ltfield": "lt"}
+
+// ReadsField reports whether a rule reads another field of the struct: a
+// condition or a comparison. After a dive there is none beside the value.
+func ReadsField(name string) bool {
+	return name == "requiredif" || name == "forbiddenif" || Compare[name] != ""
 }
 
 // Field describes the value a rule is checked against.
@@ -178,6 +190,11 @@ func Check(r Rule, f Field) error {
 		case String, Slice, Map, Time, Any:
 			return nil
 		case Int, Uint, Float, Bool:
+			// Forbidding needs no difference between missing and zero:
+			// both are empty, which is what forbiddenif asks for.
+			if r.Name == "forbiddenif" {
+				return nil
+			}
 			return fmt.Errorf("%s on a plain %s cannot tell a missing value from %s; use a pointer, or min to forbid zero", r.Name, k, zeroOf(k))
 		case Struct:
 			return fmt.Errorf("%s on a struct has no effect, a struct is always present; use a pointer", r.Name)
@@ -208,6 +225,29 @@ func Check(r Rule, f Field) error {
 			return fmt.Errorf("oneof needs at least one value")
 		}
 		if k == String {
+			return nil
+		}
+	case "unique":
+		if r.Arg != "" {
+			if _, err := Path(r.Arg); err != nil {
+				return err
+			}
+		}
+		if k == Slice {
+			return nil
+		}
+	case "requiredkeys":
+		if len(strings.Fields(r.Arg)) == 0 {
+			return fmt.Errorf("requiredkeys needs at least one key")
+		}
+		if k == Map {
+			return nil
+		}
+	case "minfield", "maxfield", "gtfield", "ltfield":
+		if _, err := Path(r.Arg); err != nil {
+			return err
+		}
+		if k.Number() || k == Time {
 			return nil
 		}
 	default:
@@ -258,11 +298,14 @@ func ParseNumber(arg string, k Kind) (float64, error) {
 
 // ParseCond splits the argument of requiredif and forbiddenif, "field:value".
 // A leading "!" on the value negates the comparison; an empty value means
-// "is empty".
+// "is empty". field may be a path into a struct beside the value.
 func ParseCond(arg string) (field, value string, negate bool, err error) {
 	field, value, ok := strings.Cut(arg, ":")
 	if !ok || field == "" {
 		return "", "", false, fmt.Errorf("a condition needs the form field:value, got %q", arg)
+	}
+	if _, err := Path(field); err != nil {
+		return "", "", false, err
 	}
 	if strings.HasPrefix(value, "!") {
 		return field, value[1:], true, nil
@@ -284,4 +327,55 @@ func Code(rule string, k Kind) string {
 		return rule + "Items"
 	}
 	return rule
+}
+
+// Path splits a reference to another field: a JSON name, or names joined
+// by dots into structs, "target.purpose".
+func Path(s string) ([]string, error) {
+	parts := strings.Split(s, ".")
+	for _, p := range parts {
+		if p == "" {
+			return nil, fmt.Errorf("%q is not a field name or a path of field names joined by dots", s)
+		}
+	}
+	return parts, nil
+}
+
+// NotStruct is the mistake of a path that leads through a value without
+// fields. A path reads into structs only: into a list or map it would not
+// say which entry.
+func NotStruct(rule, path, step string, k Kind) error {
+	return fmt.Errorf("%s reads %s, but %s is %s; a path leads through structs only", rule, path, step, k.phrase())
+}
+
+// InElem is the mistake of a rule that reads another field after a dive,
+// where the value has none beside it.
+func InElem(rule string) error {
+	return fmt.Errorf("%s reads another field of the struct; after dive there is none", rule)
+}
+
+// CheckCompare reports whether a comparison fits: numbers with numbers,
+// times with times. Text has no order tether could share with the browser.
+func CheckCompare(rule string, own Kind, path string, other Kind) error {
+	if own.Number() && other.Number() || own == Time && other == Time {
+		return nil
+	}
+	return fmt.Errorf("%s compares %s with %s, %s; it compares numbers with numbers and times with times", rule, own.phrase(), path, other.phrase())
+}
+
+// CheckUnique reports whether unique can compare values of kind k: text,
+// numbers and booleans, which are equal in Go exactly when they are equal
+// in JSON. bytes marks a []byte, whose base64 may be written two ways.
+func CheckUnique(path string, k Kind, bytes bool) error {
+	if !bytes && (k == String || k.Number() || k == Bool) {
+		return nil
+	}
+	what, kind := "each element", k.phrase()
+	if path != "" {
+		what = path
+	}
+	if bytes {
+		kind = "a []byte"
+	}
+	return fmt.Errorf("unique compares text, numbers and booleans; %s is %s", what, kind)
 }

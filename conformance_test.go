@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -161,50 +162,44 @@ func vectorType(fields []vectorField) reflect.Type {
 	return reflect.StructOf(sfs)
 }
 
-func vectorGoType(f vectorField) reflect.Type {
-	switch f.Type {
+// vectorGoType reads a vector type from the outside in: *T, []T and
+// map[string]T around the base types.
+func vectorGoType(f vectorField) reflect.Type { return goType(f.Type, f) }
+
+func goType(t string, f vectorField) reflect.Type {
+	switch {
+	case t == "[]byte":
+		return reflect.TypeFor[[]byte]()
+	case t == "map[color]string":
+		return reflect.TypeFor[map[color]string]()
+	case strings.HasPrefix(t, "*"):
+		return reflect.PointerTo(goType(t[1:], f))
+	case strings.HasPrefix(t, "[]"):
+		return reflect.SliceOf(goType(t[2:], f))
+	case strings.HasPrefix(t, "map[string]"):
+		return reflect.MapOf(reflect.TypeFor[string](), goType(t[len("map[string]"):], f))
+	}
+	switch t {
 	case "string":
 		return reflect.TypeFor[string]()
-	case "*string":
-		return reflect.TypeFor[*string]()
 	case "int":
 		return reflect.TypeFor[int]()
-	case "*int":
-		return reflect.TypeFor[*int]()
 	case "int8":
 		return reflect.TypeFor[int8]()
 	case "uint":
 		return reflect.TypeFor[uint]()
 	case "float64":
 		return reflect.TypeFor[float64]()
-	case "*float64":
-		return reflect.TypeFor[*float64]()
 	case "bool":
 		return reflect.TypeFor[bool]()
 	case "time":
 		return reflect.TypeFor[time.Time]()
 	case "color":
 		return reflect.TypeFor[color]()
-	case "[]string":
-		return reflect.TypeFor[[]string]()
-	case "[]color":
-		return reflect.TypeFor[[]color]()
-	case "map[string]string":
-		return reflect.TypeFor[map[string]string]()
-	case "map[color]string":
-		return reflect.TypeFor[map[color]string]()
-	case "[]byte":
-		return reflect.TypeFor[[]byte]()
 	case "code":
 		return reflect.TypeFor[code]()
-	case "*code":
-		return reflect.TypeFor[*code]()
-	case "[]code":
-		return reflect.TypeFor[[]code]()
 	case "object":
 		return vectorType(f.Fields)
-	case "[]object":
-		return reflect.SliceOf(vectorType(f.Fields))
 	}
 	panic("unknown vector type " + f.Type)
 }

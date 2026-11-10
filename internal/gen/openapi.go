@@ -372,7 +372,7 @@ func (o *openAPI) field(d *structDef, f *fieldDef, subst map[string]*tsType) obj
 		if f.typ.kind == kNullable {
 			target = s["anyOf"].([]any)[0].(obj)
 		}
-		notes = append(notes, o.rules(target, f.tag.Rules, f.typ.base())...)
+		notes = append(notes, o.rules(target, f.tag.Rules, f.typ)...)
 		if f.tag.Elem != nil {
 			o.elemRules(target, *f.tag.Elem, f.typ.base())
 		}
@@ -414,7 +414,7 @@ func (o *openAPI) elemRules(s obj, tag vtag.Tag, t *tsType) {
 	if inner == nil {
 		return
 	}
-	notes := o.rules(inner, tag.Rules, t.elem.base())
+	notes := o.rules(inner, tag.Rules, t.elem)
 	if len(notes) > 0 {
 		inner["description"] = strings.Join(notes, " ")
 	}
@@ -424,8 +424,10 @@ func (o *openAPI) elemRules(s obj, tag vtag.Tag, t *tsType) {
 }
 
 // rules adds the JSON Schema keywords for a tag's rules to s and returns
-// sentences for what has no keyword.
-func (o *openAPI) rules(s obj, rules []vtag.Rule, t *tsType) []string {
+// sentences for what has no keyword. full is the field's type, nullable
+// or not; s is the schema of its base.
+func (o *openAPI) rules(s obj, rules []vtag.Rule, full *tsType) []string {
+	t := full.base()
 	var notes []string
 	text := t.kind == kString || t.kind == kEnum || t.kind == kBytes
 	list := t.kind == kArray || t.kind == kRecord
@@ -444,7 +446,40 @@ func (o *openAPI) rules(s obj, rules []vtag.Rule, t *tsType) []string {
 			}
 		case "requiredif", "forbiddenif":
 			field, value, negate, _ := vtag.ParseCond(r.Arg)
-			notes = append(notes, condSentence(r.Name, field, value, negate))
+			blank := "empty"
+			if full.kind != kNullable {
+				switch t.kind {
+				case kInteger, kNumber:
+					blank = "0"
+				case kBoolean:
+					blank = "false"
+				}
+			}
+			notes = append(notes, condSentence(r.Name, field, value, negate, blank))
+		case "unique":
+			if r.Arg == "" {
+				s["uniqueItems"] = true
+			} else {
+				notes = append(notes, "No two entries have the same "+r.Arg+".")
+			}
+		case "requiredkeys":
+			keys := strings.Fields(r.Arg)
+			s["required"] = keys
+			if e := t.elem; e.kind == kNullable || e.kind != kInteger && e.kind != kNumber && e.kind != kBoolean {
+				what := "The entries " + strings.Join(keys, ", ")
+				if len(keys) == 1 {
+					what = "The entry " + keys[0]
+				}
+				notes = append(notes, what+" must not be empty.")
+			}
+		case "minfield":
+			notes = append(notes, "Must not be less than "+r.Arg+".")
+		case "maxfield":
+			notes = append(notes, "Must not be greater than "+r.Arg+".")
+		case "gtfield":
+			notes = append(notes, "Must be greater than "+r.Arg+".")
+		case "ltfield":
+			notes = append(notes, "Must be less than "+r.Arg+".")
 		case "min", "max":
 			kw := map[bool]string{true: "minimum", false: "maximum"}[r.Name == "min"]
 			switch {
@@ -486,7 +521,9 @@ func number(f float64) any {
 	return f
 }
 
-func condSentence(rule, field, value string, negate bool) string {
+// condSentence says a condition in words; blank is what "empty" means for
+// the field, 0 or false for a plain number or boolean.
+func condSentence(rule, field, value string, negate bool, blank string) string {
 	var when string
 	switch {
 	case value == "" && !negate:
@@ -501,5 +538,5 @@ func condSentence(rule, field, value string, negate bool) string {
 	if rule == "requiredif" {
 		return "Required when " + when + "."
 	}
-	return "Must be empty when " + when + "."
+	return "Must be " + blank + " when " + when + "."
 }

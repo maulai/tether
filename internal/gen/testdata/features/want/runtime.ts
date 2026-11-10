@@ -10,18 +10,22 @@ const messages: Record<string, string> = {
   enum: "Bitte einen der angebotenen Werte wählen.",
   forbiddenif: "Muss leer bleiben.",
   gt: "Muss größer als {gt} sein.",
+  gtfield: "Muss größer als der Anfang des Bereichs sein.",
   integer: "Bitte eine ganze Zahl eingeben.",
   internal: "Es ist ein Fehler aufgetreten.",
   invalid: "Bitte die markierten Felder prüfen.",
   itemID: "Use eight hex digits.",
   lt: "Muss kleiner als {lt} sein.",
+  ltfield: "Muss kleiner als das Ende des Bereichs sein.",
   malformed: "Die Anfrage konnte nicht gelesen werden.",
   max: "Höchstens {max}.",
   maxItems: "Höchstens {max} Einträge.",
   maxLength: "Höchstens {max} Zeichen.",
+  maxfield: "Darf nicht größer als das Ende des Bereichs sein.",
   min: "Mindestens {min}.",
   minItems: "Mindestens {min} Einträge.",
   minLength: "Mindestens {min} Zeichen.",
+  minfield: "Darf nicht kleiner als der Anfang des Bereichs sein.",
   missing: "Fehlt. Bei PUT gehört jedes Feld dazu; null oder ein leerer Wert leert es.",
   network: "Der Server ist nicht erreichbar.",
   notFound: "Nicht gefunden.",
@@ -33,6 +37,7 @@ const messages: Record<string, string> = {
   text: "Enthält unsichtbare Steuerzeichen.",
   tooLarge: "Die Anfrage ist zu groß.",
   type: "Ungültiger Wert.",
+  unique: "Steht schon in der Liste.",
   unknown: "Unbekanntes Feld.",
   url: "Bitte eine Adresse mit http:// oder https:// angeben.",
   zip: "Bitte fünf Ziffern.",
@@ -358,6 +363,8 @@ interface Tag {
 interface Plan {
   spec: FieldSpec;
   required: boolean;
+  /** The keys of requiredkeys: entries a record must have. */
+  keys: string[];
   conds: { name: string; field: string; value: string; negate: boolean }[];
   rules: Rule[];
   elem?: Plan;
@@ -385,19 +392,24 @@ function parseTag(s: string | undefined): Tag {
   return root;
 }
 
+const comparisons: ReadonlySet<string> = new Set(["minfield", "maxfield", "gtfield", "ltfield"]);
+
 function compile(fields: Record<string, FieldSpec>): Compiled {
+  // A rule that reads a field pick or omit removed has nothing to read.
+  const kept = (path: string) => (path.split(".")[0] ?? "") in fields;
   return Object.entries(fields).map(([name, spec]) => {
     const p = plan(spec, parseTag(spec.v));
-    // A condition on a field that pick or omit removed has nothing to read.
-    p.conds = p.conds.filter((c) => c.field in fields);
+    p.conds = p.conds.filter((c) => kept(c.field));
+    p.rules = p.rules.filter((r) => !comparisons.has(r.name) || kept(r.arg));
     return { name, plan: p };
   });
 }
 
 function plan(spec: FieldSpec, tag: Tag): Plan {
-  const p: Plan = { spec, required: false, conds: [], rules: [] };
+  const p: Plan = { spec, required: false, keys: [], conds: [], rules: [] };
   for (const r of tag.rules) {
     if (r.name === "required") p.required = true;
+    else if (r.name === "requiredkeys") p.keys.push(...words(r.arg));
     else if (r.name === "requiredif" || r.name === "forbiddenif") {
       const colon = r.arg.indexOf(":");
       let value = r.arg.slice(colon + 1);
@@ -542,9 +554,9 @@ function checkObject(path: string, v: Record<string, unknown>, fields: Compiled,
   for (const f of fields) check(join(path, f.name), v[f.name], f.plan, v, fields, false, out);
 }
 
-// The order matches the server: conditions, required, the always-on text
-// and enum checks, the tag's rules as written, then the contents. At most
-// one error per value.
+// The order matches the server: conditions, required, the keys of
+// requiredkeys, the always-on text and enum checks, the tag's rules as
+// written, then the contents. At most one error per value.
 function check(
   path: string,
   v: unknown,
@@ -556,11 +568,12 @@ function check(
 ): void {
   const isEmpty = empty(v, p.spec);
   for (const c of p.conds) {
-    const sib = siblings?.find((s) => s.name === c.field);
-    if (!sib || !parent || !condMatches(c.value, c.negate, parent[c.field], sib.plan.spec)) continue;
+    const sib = follow(c.field, parent, siblings);
+    if (!sib || !condMatches(c.value, c.negate, sib.v, sib.p.spec)) continue;
     if ((c.name === "requiredif" && isEmpty) || (c.name === "forbiddenif" && !isEmpty)) return add(out, path, c.name);
   }
   if (p.required && isEmpty) return add(out, path, "required");
+  if (p.keys.length > 0 && missingKeys(path, v, p, out)) return;
   if (v === null || v === undefined) return;
   if (!elem && absent(v, p.spec)) return;
   if (typeof v === "string" && p.spec.type === "string") {
@@ -568,7 +581,14 @@ function check(
     if (p.spec.enum && !p.spec.enum.includes(v)) return add(out, path, "enum");
   }
   for (const r of p.rules) {
-    if (!holds(r, v, p.spec)) return add(out, path, code(r.name, p.spec), args(r));
+    if (r.name === "unique") {
+      // Reported at each repetition, so a form marks the entry to change.
+      const dups = duplicates(v as unknown[], p.elem!, r.arg);
+      for (const d of dups) add(out, join(path, d), "unique");
+      if (dups.length > 0) return;
+    } else if (comparisons.has(r.name)) {
+      if (!compareHolds(r, v, p.spec, follow(r.arg, parent, siblings))) return add(out, path, r.name, { field: r.arg });
+    } else if (!holds(r, v, p.spec)) return add(out, path, code(r.name, p.spec), args(r));
   }
   switch (p.spec.type) {
     case "array":
@@ -607,9 +627,15 @@ const base64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$
 const emailRe = /^[^@\t\n\f\r ]+@[^@\t\n\f\r ]+\.[^@\t\n\f\r ]+$/;
 const urlRe = /^[Hh][Tt][Tt][Pp][Ss]?:\/\/[^\t\n\f\r /]+[^\t\n\f\r ]*$/;
 
+// A plain number or boolean is empty at 0 or false, what a missing one
+// becomes; a nullable one has content once it is set.
 function empty(v: unknown, spec: FieldSpec): boolean {
   if (v === null || v === undefined) return true;
   switch (spec.type) {
+    case "number":
+      return !spec.nullable && v === 0;
+    case "boolean":
+      return !spec.nullable && v === false;
     case "string":
       return blank.test(v as string);
     case "bytes":
@@ -637,6 +663,84 @@ function absent(v: unknown, spec: FieldSpec): boolean {
       return v === "" || isZeroTime(v as string);
   }
   return false;
+}
+
+// follow reads the field a path leads to, from the object beside the
+// value: undefined for v when a null object on the way leaves it missing.
+function follow(
+  path: string,
+  parent: Record<string, unknown> | undefined,
+  siblings: Compiled | undefined,
+): { v: unknown; p: Plan } | undefined {
+  let v: unknown = parent;
+  let fields = siblings;
+  let p: Plan | undefined;
+  for (const name of path.split(".")) {
+    p = fields?.find((f) => f.name === name)?.plan;
+    if (!p) return undefined;
+    v = isObject(v) ? v[name] : undefined;
+    fields = p.fields;
+  }
+  return p && { v, p };
+}
+
+// A bound that is not given sets no bound. Times compare to the
+// millisecond, the precision of the browser and of the server's check.
+function compareHolds(r: Rule, v: unknown, spec: FieldSpec, bound: { v: unknown; p: Plan } | undefined): boolean {
+  if (!bound || bound.v === null || bound.v === undefined) return true;
+  let x = v as number;
+  let y = bound.v as number;
+  if (spec.type === "datetime") {
+    if (bound.v === "" || isZeroTime(bound.v as string)) return true;
+    x = parseTime(v as string)!.ms;
+    y = parseTime(bound.v as string)!.ms;
+  }
+  switch (r.name) {
+    case "minfield":
+      return x >= y;
+    case "maxfield":
+      return x <= y;
+    case "gtfield":
+      return x > y;
+  }
+  return x < y;
+}
+
+// missingKeys reports each key of requiredkeys the record lacks or holds
+// without content, as required would. A number or boolean has content once
+// its key is there.
+function missingKeys(path: string, v: unknown, p: Plan, out: FieldError[]): boolean {
+  const rec = isObject(v) ? v : {};
+  const spec = p.elem!.spec;
+  let missing = false;
+  for (const k of p.keys) {
+    const e = Object.prototype.hasOwnProperty.call(rec, k) ? rec[k] : undefined;
+    const plain = !spec.nullable && (spec.type === "number" || spec.type === "boolean");
+    if (e === undefined || (!plain && empty(e, spec))) {
+      add(out, join(path, k), "required");
+      missing = true;
+    }
+  }
+  return missing;
+}
+
+// duplicates lists the elements that repeat an earlier one, as paths below
+// the list: "3", or "3.sku" for unique=sku. An element is compared as a
+// whole, null included; a field it names only when it is given.
+function duplicates(list: unknown[], p: Plan, field: string): string[] {
+  const seen = new Set<unknown>();
+  const out: string[] = [];
+  list.forEach((el, i) => {
+    let v = el;
+    if (field !== "") {
+      const f = isObject(el) ? follow(field, el, p.fields) : undefined;
+      if (!f || f.v === null || f.v === undefined || absent(f.v, f.p.spec)) return;
+      v = f.v;
+    }
+    if (!seen.has(v)) seen.add(v);
+    else out.push(field === "" ? String(i) : String(i) + "." + field);
+  });
+  return out;
 }
 
 function condMatches(want: string, negate: boolean, sib: unknown, spec: FieldSpec): boolean {
@@ -677,7 +781,7 @@ function holds(r: Rule, v: unknown, spec: FieldSpec): boolean {
     case "url":
       return urlRe.test(v as string);
     case "oneof":
-      return r.arg.split(/[\t\n\v\f\r ]+/).filter(Boolean).includes(v as string);
+      return words(r.arg).includes(v as string);
   }
   if (serverOnly.has(r.name)) return true; // a Go check: the server decides
   return patterns[r.name]?.test(v as string) ?? true;
@@ -698,9 +802,15 @@ function args(r: Rule): Record<string, string> | undefined {
     case "lt":
       return { [r.name]: r.arg };
     case "oneof":
-      return { values: r.arg.split(/[\t\n\v\f\r ]+/).filter(Boolean).join(", ") };
+      return { values: words(r.arg).join(", ") };
   }
   return undefined;
+}
+
+// words splits a list argument at whitespace, as Go's strings.Fields does
+// for the ASCII spaces a tag holds.
+function words(s: string): string[] {
+  return s.split(/[\t\n\v\f\r ]+/).filter(Boolean);
 }
 
 // Go sorts map keys by their UTF-8 bytes, which is code point order.
@@ -722,7 +832,7 @@ const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/;
 const dateTime = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|([+-])(\d{2}):(\d{2}))$/;
 
 interface Instant {
-  ms: number;
+  ms: number; // whole milliseconds; a finer fraction is cut off, as Go's UnixMilli does
   fraction: boolean; // a non-zero fraction of a second
 }
 
@@ -745,7 +855,8 @@ function parseTime(s: string): Instant | undefined {
     if (oh > 23 || om > 59) return undefined;
     offset = (t[9] === "-" ? -1 : 1) * (oh * 60 + om) * 60000;
   }
-  return { ms: utc(y, mo, da, h, mi, se) - offset, fraction: /[1-9]/.test(t[7] ?? "") };
+  const ms = Number(((t[7] ?? ".").slice(1) + "000").slice(0, 3));
+  return { ms: utc(y, mo, da, h, mi, se) - offset + ms, fraction: /[1-9]/.test(t[7] ?? "") };
 }
 
 // Date.UTC maps the years 0 to 99 to 1900 to 1999; setUTCFullYear does not.

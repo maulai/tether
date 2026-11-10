@@ -547,8 +547,8 @@ Rules come from the `v` struct tag: a comma separated list of rules, each
 |---|---|---|---|
 | `required` | string | not empty and not only whitespace | `required` |
 | | pointer, slice, map, `time.Time` | not nil, not empty, not zero | `required` |
-| `requiredif=f:v` | any | required when sibling `f` equals `v` | `requiredif` |
-| `forbiddenif=f:v` | any | must be empty when sibling `f` equals `v` | `forbiddenif` |
+| `requiredif=f:v` | any | required when field `f` equals `v` | `requiredif` |
+| `forbiddenif=f:v` | any | must be empty when field `f` equals `v` | `forbiddenif` |
 | `min=N`, `max=N` | string | length in characters | `minLength`, `maxLength` |
 | | number | value, inclusive | `min`, `max` |
 | | slice, map | number of entries | `minItems`, `maxItems` |
@@ -556,13 +556,68 @@ Rules come from the `v` struct tag: a comma separated list of rules, each
 | `email` | string | `^[^@\s]+@[^@\s]+\.[^@\s]+$` | `email` |
 | `url` | string | `http://` or `https://`, a host, no whitespace | `url` |
 | `oneof=a b c` | string | one of the listed values (space separated) | `oneof` |
+| `unique` | slice | no element repeats an earlier one | `unique` |
+| `unique=f` | slice of structs | no two elements have the same field `f` | `unique` |
+| `requiredkeys=a b` | map | has the keys `a` and `b`, each with content | `required` |
+| `minfield=f`, `maxfield=f` | number, `time.Time` | not less, not greater than field `f` | `minfield`, `maxfield` |
+| `gtfield=f`, `ltfield=f` | number, `time.Time` | greater, less than field `f` | `gtfield`, `ltfield` |
 | `dive` | slice, map | the following rules apply to each element | |
 
 **Conditions.** In `requiredif` and `forbiddenif`, a leading `!` negates the
 value (`forbiddenif=kind:!invoice` means "must be empty unless kind is
 invoice"). An empty value means "is empty". The value is compared in the
-sibling's type: `true` or `false` for a boolean, a number for a number,
-text otherwise. A sibling that does not exist is an error when generating.
+field's type: `true` or `false` for a boolean, a number for a number,
+text otherwise. A field that does not exist is an error when generating.
+
+**Other fields.** Conditions and comparisons read a field beside the value
+by its JSON name, or a field of a struct beside it by a path:
+`requiredif=target.purpose:loan`. A path leads through structs only: into
+a list or map it would not say which entry, and up to an enclosing struct
+it would make a type's rules depend on where it is used. A nil pointer on
+the way leaves the field missing, which is empty and equals no value.
+After `dive` there is no field beside the value, so these rules are a
+mistake there.
+
+**Empty.** Text that is only whitespace, an empty list or map, the zero
+time and a nil pointer are empty. A plain number or boolean is empty at
+`0` or `false`, which is what a missing one decodes to: `forbiddenif` on
+it means "must be 0" or "must be false", and `requiredif=count:` holds
+when count is `0`. `required` and `requiredif` on a plain number or
+boolean stay a mistake, since they cannot tell "missing" from `0`; a
+pointer to a number has content once it is set, `0` included.
+
+**Unique.** `unique` compares the elements of a list as they are: text
+exactly, without folding case or trimming, numbers by value, `null` like
+any other element. `unique=sku` compares one field of each element, and
+skips elements that do not give it. Every element that repeats an earlier
+one is reported at its own path, `tags.3` or `items.3.sku`, so a form marks
+the entry to change; the list's later rules and its elements are then not
+checked, as after any failed list rule. unique compares text, numbers and
+booleans: times are equal at the same instant written two ways, and bytes
+have two base64 spellings, so neither could be compared alike in the
+browser. A text type compares by its text form; write its Format so a
+value has one spelling, or the browser may miss a repetition the server
+finds.
+
+**Required keys.** `requiredkeys=de en` needs the map to have each key, with
+content as `required` defines it; a number or boolean has content once its
+key is there. Each missing key is reported at its path, `title.de`, with
+`required`. The map itself must be sent, so the field is required in
+TypeScript and OpenAPI. A map with enum keys names only values of its enum.
+
+**Comparisons.** `minfield=from` on `to` means `to` is not less than `from`;
+`maxfield`, `gtfield` and `ltfield` are the counterparts of `max`, `gt` and
+`lt`. They compare numbers with numbers and times with times; text has no
+order the browser could share. A bound that is not given, a nil pointer or
+the zero time, sets none, and a value that is not given is not checked.
+Times compare to the millisecond, the precision of the browser, so
+`10:00:00.0009` is not after `10:00:00`. The text cannot name the other
+field, since tether knows no labels: the default speaks of the start and
+end of a range, `{field}` holds the JSON name for a project's own text.
+
+**Order.** For each value: conditions, `required`, the keys of
+`requiredkeys`, the always-on text and enum checks, the tag's rules as
+written, then the contents. At most one error per value.
 
 **Always on, without a tag:**
 - `text`: every string, at every depth, is rejected if it contains control
@@ -585,9 +640,12 @@ as with `encoding/json`. The browser validator treats a missing value the
 same way, so `min=1` rejects it on both sides with the same message.
 
 **Mistakes in tags are errors when generating:** an unknown rule, a rule on
-a type it does not apply to (`gt` on a string), or `required` on a plain
+a type it does not apply to (`gt` on a string), `required` on a plain
 number or boolean (use a pointer; a missing number cannot be told apart from
-zero).
+zero), a path to a field that does not exist or leads through a list, a
+comparison of a time with a number, and `unique` on values it cannot
+compare. `Route` and `Validate` panic for the same mistakes, with the same
+words.
 
 ### 4.2 Project rules
 
@@ -691,7 +749,8 @@ func init() {
   `Pattern`'s message, then `Messages`. The browser produces the same texts
   as the server.
 - Placeholders in braces are replaced with the rule's argument: `{min}`,
-  `{max}`, `{gt}`, `{lt}`, `{values}`.
+  `{max}`, `{gt}`, `{lt}`, `{values}`, and `{field}` for the field a
+  comparison reads.
 
 | Code | Default text |
 |---|---|
@@ -712,6 +771,11 @@ func init() {
 | `maxItems` | Must contain at most {max} entries. |
 | `enum` | Must be one of the offered values. |
 | `oneof` | Must be one of: {values}. |
+| `unique` | Already in the list. |
+| `minfield` | Must not be less than the start of the range. |
+| `maxfield` | Must not be greater than the end of the range. |
+| `gtfield` | Must be greater than the start of the range. |
+| `ltfield` | Must be less than the end of the range. |
 | `email` | Must be a valid email address. |
 | `url` | Must be a web address starting with http:// or https://. |
 | `invalid` | Please check the marked fields. |
@@ -811,8 +875,10 @@ One OpenAPI 3.1 document for all routes:
 - The `Problem` schema lists every declared code with its status and text,
   and `instance`.
 - Rules become the matching JSON Schema keywords (`minLength`, `maximum`,
-  `exclusiveMinimum`, `minItems`, `format`, `enum`, `pattern`). Conditions
-  and server-only checks are written as sentences in `description`. JSON
+  `exclusiveMinimum`, `minItems`, `format`, `enum`, `pattern`,
+  `uniqueItems`, and `required` on a map for `requiredkeys`). Conditions,
+  comparisons, `unique` on a field and server-only checks are written as
+  sentences in `description`. JSON
   Schema cannot express everything exactly (it does not know "not only
   whitespace"); the document is a faithful description for other tools, the
   behaviour is defined here.
@@ -906,7 +972,7 @@ offers:
   in the same order; a Format is checked with the shape, as on the
   server,
 - `pick(...keys)` and `omit(...keys)` for forms that show only some fields;
-  conditions that refer to a removed field are dropped with it,
+  conditions and comparisons that read a removed field are dropped with it,
 - `strip(value)`, the value with only the fields of the type.
 
 The validator checks shape first (`type`, `integer`) and rules only when the

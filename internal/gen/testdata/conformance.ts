@@ -32,13 +32,17 @@ const vectors: { formats?: Record<string, { type: string }>; cases: VectorCase[]
 // The format of each vector type that has one, such as code.
 const formats = Object.fromEntries(Object.entries(vectors.formats ?? {}).map(([name, f]) => [f.type, name]));
 
-function base(f: VectorField): FieldSpec {
-  if (f.type === "[]byte") return { type: "bytes" };
-  if (f.type === "map[color]string") return { type: "record", keys: colors, elem: { type: "string" } };
-  const name = f.type.replace(/^\*/, "").replace(/^\[\]/, "");
-  const format = formats[name];
+// typeSpec reads a vector type from the outside in, like the Go side: *T,
+// []T and map[string]T around the base types.
+function typeSpec(t: string, f: VectorField): FieldSpec {
+  if (t === "[]byte") return { type: "bytes" };
+  if (t === "map[color]string") return { type: "record", keys: colors, elem: { type: "string" } };
+  if (t.startsWith("*")) return { ...typeSpec(t.slice(1), f), nullable: true };
+  if (t.startsWith("[]")) return { type: "array", elem: typeSpec(t.slice(2), f) };
+  if (t.startsWith("map[string]")) return { type: "record", elem: typeSpec(t.slice("map[string]".length), f) };
+  const format = formats[t];
   if (format) return { type: "string", format };
-  switch (name) {
+  switch (t) {
     case "string":
       return { type: "string" };
     case "int":
@@ -57,16 +61,12 @@ function base(f: VectorField): FieldSpec {
       return { type: "string", enum: colors };
     case "object":
       return { type: "object", fields: specs(f.fields ?? []) };
-    case "map[string]string":
-      return { type: "record", elem: { type: "string" } };
   }
   throw new Error("unknown vector type " + f.type);
 }
 
 function spec(f: VectorField): FieldSpec {
-  let s = base(f);
-  if (f.type.startsWith("[]") && f.type !== "[]byte") s = { type: "array", elem: s };
-  if (f.type.startsWith("*")) s = { ...s, nullable: true };
+  const s = typeSpec(f.type, f);
   return f.tag ? { ...s, v: f.tag } : s;
 }
 

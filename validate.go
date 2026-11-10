@@ -49,8 +49,9 @@ func Validate(v any) error {
 // is the one worth fixing first.
 //
 // The order is fixed, and the TypeScript runtime follows it: conditions,
-// required, then the always-on text and enum checks, then the tag's rules
-// in the order they are written, then the contents.
+// required, the keys of requiredkeys, then the always-on text and enum
+// checks, then the tag's rules in the order they are written, then the
+// contents.
 func validate(v reflect.Value, sp *structPlan) []Issue {
 	var c checker
 	c.structFields("", v, sp)
@@ -91,6 +92,9 @@ func (c *checker) value(path string, v reflect.Value, vp *valuePlan, parent refl
 		c.add(path, "required", nil)
 		return
 	}
+	if len(vp.keys) > 0 && c.missingKeys(path, v, vp) {
+		return
+	}
 	if vp.pointer {
 		if v.IsNil() {
 			return
@@ -112,7 +116,18 @@ func (c *checker) value(path string, v reflect.Value, vp *valuePlan, parent refl
 		}
 	}
 	for _, r := range vp.rules {
-		if !ruleHolds(r, v, vp) {
+		if r.name == "unique" {
+			// Reported at each repetition, so a form marks the entry to
+			// change, not the list.
+			if dups := duplicates(v, vp, r); len(dups) > 0 {
+				for _, d := range dups {
+					c.add(join(path, d), "unique", nil)
+				}
+				return
+			}
+			continue
+		}
+		if !ruleHolds(r, v, vp, parent) {
 			c.add(path, r.code, ruleArgs(r))
 			return
 		}
@@ -143,13 +158,17 @@ func (c *checker) value(path string, v reflect.Value, vp *valuePlan, parent refl
 }
 
 // empty answers "does the field have content?" for required and the
-// conditions. Text that is only whitespace has none.
+// conditions. Text that is only whitespace has none. A plain number or
+// boolean is empty at 0 or false, which is what a missing one decodes to; a
+// pointer to one has content once it is set.
 func empty(v reflect.Value, vp *valuePlan) bool {
 	if vp.pointer {
 		if v.IsNil() {
 			return true
 		}
 		v = v.Elem()
+	} else if vp.kind == vtag.Bool || vp.kind.Number() {
+		return v.IsZero()
 	}
 	switch vp.kind {
 	case vtag.String:
@@ -186,14 +205,34 @@ func absent(v reflect.Value, vp *valuePlan) bool {
 	return false
 }
 
-func condMatches(cd cond, parent reflect.Value) bool {
-	sp := cd.sibling.plan
-	sib, ok := fieldByIndex(parent, cd.sibling.index, false)
-	if !ok {
-		sib = reflect.Zero(cd.sibling.field.Type)
+// follow reads the field a path leads to, from the struct v. It reports
+// false when a nil pointer to a struct on the way leaves the field missing.
+func follow(v reflect.Value, path []*fieldPlan) (reflect.Value, *valuePlan, bool) {
+	var vp *valuePlan
+	for _, fp := range path {
+		if vp != nil && vp.pointer {
+			if v.IsNil() {
+				return reflect.Value{}, nil, false
+			}
+			v = v.Elem()
+		}
+		fv, ok := fieldByIndex(v, fp.index, false)
+		if !ok {
+			// A field of a nil embedded struct reads as its zero value, as
+			// the browser sees it in the flattened object.
+			fv = reflect.Zero(fp.field.Type)
+		}
+		v, vp = fv, fp.plan
 	}
+	return v, vp, true
+}
+
+func condMatches(cd cond, parent reflect.Value) bool {
+	sib, sp, ok := follow(parent, cd.path)
 	var match bool
 	switch {
+	case !ok:
+		match = cd.value == "" // a missing field is empty
 	case cd.value == "":
 		match = empty(sib, sp)
 	case sp.pointer && sib.IsNil():
@@ -215,8 +254,10 @@ func condMatches(cd cond, parent reflect.Value) bool {
 	return match != cd.negate
 }
 
-func ruleHolds(r rule, v reflect.Value, vp *valuePlan) bool {
+func ruleHolds(r rule, v reflect.Value, vp *valuePlan, parent reflect.Value) bool {
 	switch r.name {
+	case "minfield", "maxfield", "gtfield", "ltfield":
+		return compareHolds(r, v, vp, parent)
 	case "min":
 		return measure(v, vp) >= r.num
 	case "max":
@@ -239,10 +280,126 @@ func ruleHolds(r rule, v reflect.Value, vp *valuePlan) bool {
 	return pr.check(text(v))
 }
 
+// compareHolds checks a comparison with another field. A bound that is
+// not given, a nil pointer or the zero time, sets no bound. Times compare
+// to the millisecond, the precision the browser has.
+func compareHolds(r rule, v reflect.Value, vp *valuePlan, parent reflect.Value) bool {
+	b, bp, ok := follow(parent, r.path)
+	if !ok {
+		return true
+	}
+	if bp.pointer {
+		if b.IsNil() {
+			return true
+		}
+		b = b.Elem()
+	}
+	var x, y float64
+	if vp.kind == vtag.Time {
+		bound := b.Interface().(time.Time)
+		if bound.IsZero() {
+			return true
+		}
+		x, y = float64(v.Interface().(time.Time).UnixMilli()), float64(bound.UnixMilli())
+	} else {
+		x, y = number(v), number(b)
+	}
+	switch r.name {
+	case "minfield":
+		return x >= y
+	case "maxfield":
+		return x <= y
+	case "gtfield":
+		return x > y
+	}
+	return x < y
+}
+
+// missingKeys reports each key of requiredkeys that the map lacks or holds
+// without content, as required would: a translation that is only blanks
+// is none. A number or boolean has content once its key is there.
+func (c *checker) missingKeys(path string, v reflect.Value, vp *valuePlan) bool {
+	if vp.pointer && !v.IsNil() {
+		v = v.Elem()
+	}
+	missing := false
+	for _, k := range vp.keys {
+		var e reflect.Value
+		if v.Kind() == reflect.Map {
+			e = v.MapIndex(reflect.ValueOf(k).Convert(v.Type().Key()))
+		}
+		ep := vp.elem
+		has := e.IsValid() && (!ep.pointer && (ep.kind == vtag.Bool || ep.kind.Number()) || !empty(e, ep))
+		if !has {
+			c.add(join(path, k), "required", nil)
+			missing = true
+		}
+	}
+	return missing
+}
+
+// duplicates lists the elements of v that repeat an earlier one, as paths
+// below the list: "3", or "3.sku" for unique=sku. An element is compared as
+// a whole, null included; a field it names only when it is given.
+func duplicates(v reflect.Value, vp *valuePlan, r rule) []string {
+	seen := map[any]bool{}
+	var out []string
+	for i := range v.Len() {
+		key, ok := uniqueKey(v.Index(i), vp.elem, r.path)
+		if !ok {
+			continue
+		}
+		if !seen[key] {
+			seen[key] = true
+			continue
+		}
+		p := strconv.Itoa(i)
+		if r.arg != "" {
+			p += "." + r.arg
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+func uniqueKey(el reflect.Value, ep *valuePlan, path []*fieldPlan) (any, bool) {
+	if ep.pointer {
+		if el.IsNil() {
+			return nil, path == nil // null is an element like any other
+		}
+		el = el.Elem()
+	}
+	if path != nil {
+		fv, fp, ok := follow(el, path)
+		if !ok {
+			return nil, false
+		}
+		if fp.pointer {
+			if fv.IsNil() {
+				return nil, false
+			}
+			fv = fv.Elem()
+		}
+		if absent(fv, fp) {
+			return nil, false
+		}
+		el, ep = fv, fp
+	}
+	switch {
+	case ep.kind == vtag.Bool:
+		return el.Bool(), true
+	case ep.kind.Number():
+		return number(el), true
+	}
+	return text(el), true
+}
+
 func ruleArgs(r rule) map[string]string {
 	switch r.name {
 	case "min", "max", "gt", "lt":
 		return map[string]string{r.name: r.arg}
+	case "minfield", "maxfield", "gtfield", "ltfield":
+		return map[string]string{"field": r.arg}
 	case "oneof":
 		return map[string]string{"values": strings.Join(r.list, ", ")}
 	}

@@ -48,9 +48,15 @@ export interface ItemInput {
   kind: Kind;
   price?: number | null;
   count?: number;
-  labels?: Record<string, string>;
-  stock?: Partial<Record<Kind, number>>;
+  labels: Record<string, string>;
+  stock: Partial<Record<Kind, number>>;
   lines?: Line[];
+  tags?: string[];
+  /** Discount applies to products only. */
+  discount?: number;
+  minQty?: number;
+  maxQty?: number;
+  note?: string;
   size?: string;
   parent?: string | null;
   color?: Color;
@@ -109,9 +115,14 @@ export const itemInputSchema: Schema<ItemInput> = schema<ItemInput>({
   kind: { type: "string", enum: [...kindValues, ""], v: "required" },
   price: { type: "number", nullable: true, v: "requiredif=kind:product,gt=0" },
   count: { type: "number", int: "uint8", v: "max=100" },
-  labels: { type: "record", elem: { type: "string" }, v: "dive,max=40" },
-  stock: { type: "record", keys: [...kindValues, ""], elem: { type: "number", int: "int" } },
-  lines: { type: "array", elem: { type: "object", schema: () => lineSchema }, v: "min=1" },
+  labels: { type: "record", elem: { type: "string" }, v: "requiredkeys=de,dive,max=40" },
+  stock: { type: "record", keys: [...kindValues, ""], elem: { type: "number", int: "int" }, v: "requiredkeys=product" },
+  lines: { type: "array", elem: { type: "object", schema: () => lineSchema }, v: "min=1,unique=text" },
+  tags: { type: "array", elem: { type: "string" }, v: "unique" },
+  discount: { type: "number", v: "forbiddenif=kind:!product" },
+  minQty: { type: "number", int: "int" },
+  maxQty: { type: "number", int: "int", v: "gtfield=minQty" },
+  note: { type: "string", v: "requiredif=contact.email:" },
   size: { type: "string", v: "oneof=s m l" },
   parent: { type: "string", format: "itemID", nullable: true },
   color: { type: "string", enum: colorValues },

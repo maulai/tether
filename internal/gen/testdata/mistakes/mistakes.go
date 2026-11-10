@@ -5,6 +5,7 @@ package mistakes
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/maulai/tether"
 	"github.com/maulai/tether/internal/gen/testdata/mistakes/hidden"
@@ -103,3 +104,44 @@ type Count struct {
 func checkCount(c Count) error { return tether.Validate(c) }
 
 func checkAny(v any) error { return tether.Validate(v) }
+
+// Rules misuses the rules that read other fields and compare entries.
+type Rules struct {
+	Kind     string            `json:"kind"`
+	Target   Target            `json:"target"`
+	Targets  []Target          `json:"targets"`
+	From     time.Time         `json:"from"`
+	Low      int               `json:"low"`
+	Tags     []string          `json:"tags" v:"unique=sku"`
+	Days     []time.Time       `json:"days" v:"unique"`
+	Blobs    [][]byte          `json:"blobs" v:"unique"`
+	Lines    []Target          `json:"lines" v:"unique=nope"`
+	Stamps   []Target          `json:"stamps" v:"unique=when"`
+	Nested   [][]string        `json:"nested" v:"dive,unique=x"`
+	Labels   map[string]string `json:"labels" v:"dive,requiredif=kind:x"`
+	Until    time.Time         `json:"until" v:"minfield=low"`
+	High     int               `json:"high" v:"gtfield=kind"`
+	Far      string            `json:"far" v:"requiredif=target.nope:x"`
+	Deep     string            `json:"deep" v:"requiredif=targets.purpose:x"`
+	Leaf     string            `json:"leaf" v:"requiredif=kind.x:y"`
+	Flagged  bool              `json:"flagged" v:"requiredif=kind:x"`
+	Stock    map[Shade]int     `json:"stock" v:"requiredkeys=dark pink"`
+	Fine     float64           `json:"fine" v:"forbiddenif=target.purpose:loan,ltfield=target.limit"`
+	Measured []float64         `json:"measured" v:"unique"`
+}
+
+type Target struct {
+	Purpose string    `json:"purpose"`
+	Limit   float64   `json:"limit"`
+	When    time.Time `json:"when"`
+}
+
+// Shade is an enum, so a record keyed by it has no other keys.
+type Shade string
+
+const (
+	ShadeDark  Shade = "dark"
+	ShadeLight Shade = "light"
+)
+
+func checkRules(r Rules) error { return tether.Validate(r) }

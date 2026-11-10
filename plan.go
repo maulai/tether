@@ -33,6 +33,7 @@ type valuePlan struct {
 	kind    vtag.Kind
 
 	required bool
+	keys     []string // of requiredkeys: entries a map must have
 	conds    []cond
 	rules    []rule
 
@@ -47,14 +48,17 @@ type rule struct {
 	arg  string
 	num  float64
 	list []string
+	// path leads to the field a comparison reads, from the struct beside
+	// the value, or to the field unique compares, from each element.
+	path []*fieldPlan
 }
 
 type cond struct {
-	name    string // requiredif or forbiddenif
-	field   string
-	value   string
-	negate  bool
-	sibling *fieldPlan
+	name   string // requiredif or forbiddenif
+	field  string
+	value  string
+	negate bool
+	path   []*fieldPlan // from the struct beside the value to the field read
 }
 
 type structPlan struct {
@@ -80,6 +84,11 @@ func structPlanFor(t reflect.Type) (*structPlan, error) {
 	if err != nil {
 		return nil, err
 	}
+	for _, link := range c.links {
+		if err := link(); err != nil {
+			return nil, err
+		}
+	}
 	for typ, sp := range c.done {
 		plans.LoadOrStore(typ, sp)
 	}
@@ -88,6 +97,10 @@ func structPlanFor(t reflect.Type) (*structPlan, error) {
 
 type compiler struct {
 	done map[reflect.Type]*structPlan
+	// links resolve the paths of rules that read other fields. They run
+	// once every plan is complete, so a path into a type that is still
+	// being compiled, a recursive one, finds all its fields.
+	links []func() error
 }
 
 func (c *compiler) structPlan(t reflect.Type) (*structPlan, error) {
@@ -110,28 +123,86 @@ func (c *compiler) structPlan(t reflect.Type) (*structPlan, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s.%s: %w", t.Name(), f.name, err)
 		}
-		vp, err := c.valuePlan(f.field.Type, tag)
+		n := len(c.links)
+		vp, err := c.valuePlan(f.field.Type, tag, false)
 		if err != nil {
 			return nil, fmt.Errorf("%s.%s: %w", t.Name(), f.name, err)
+		}
+		// A link the value added reports its mistake like the value would.
+		for i := n; i < len(c.links); i++ {
+			link, name := c.links[i], f.name
+			c.links[i] = func() error {
+				if err := link(); err != nil {
+					return fmt.Errorf("%s.%s: %w", t.Name(), name, err)
+				}
+				return nil
+			}
 		}
 		fp := &fieldPlan{jsonField: f, plan: vp}
 		sp.fields = append(sp.fields, fp)
 		sp.byName[f.name] = fp
 	}
 	for _, fp := range sp.fields {
+		at := t.Name() + "." + fp.name
 		for i := range fp.plan.conds {
 			cd := &fp.plan.conds[i]
-			sib, ok := sp.byName[cd.field]
-			if !ok {
-				return nil, fmt.Errorf("%s.%s: %s refers to unknown field %q", t.Name(), fp.name, cd.name, cd.field)
+			c.links = append(c.links, func() error {
+				path, err := resolvePath(sp, cd.name, cd.field)
+				if err == nil {
+					err = checkCondValue(cd, path[len(path)-1].plan)
+				}
+				if err != nil {
+					return fmt.Errorf("%s: %w", at, err)
+				}
+				cd.path = path
+				return nil
+			})
+		}
+		for i := range fp.plan.rules {
+			r := &fp.plan.rules[i]
+			if vtag.Compare[r.name] == "" {
+				continue
 			}
-			if err := checkCondValue(cd, sib.plan); err != nil {
-				return nil, fmt.Errorf("%s.%s: %w", t.Name(), fp.name, err)
-			}
-			cd.sibling = sib
+			own := fp.plan.kind
+			c.links = append(c.links, func() error {
+				path, err := resolvePath(sp, r.name, r.arg)
+				if err == nil {
+					err = vtag.CheckCompare(r.name, own, r.arg, path[len(path)-1].plan.kind)
+				}
+				if err != nil {
+					return fmt.Errorf("%s: %w", at, err)
+				}
+				r.path = path
+				return nil
+			})
 		}
 	}
 	return sp, nil
+}
+
+// resolvePath finds the fields a path of JSON names leads through, from
+// the struct sp: the field itself, then fields of the structs inside it.
+func resolvePath(sp *structPlan, rule, path string) ([]*fieldPlan, error) {
+	names, err := vtag.Path(path)
+	if err != nil {
+		return nil, err
+	}
+	var out []*fieldPlan
+	for i, name := range names {
+		if i > 0 {
+			prev := out[i-1].plan
+			if prev.kind != vtag.Struct {
+				return nil, vtag.NotStruct(rule, path, strings.Join(names[:i], "."), prev.kind)
+			}
+			sp = prev.fields
+		}
+		fp, ok := sp.byName[name]
+		if !ok {
+			return nil, fmt.Errorf("%s refers to unknown field %q", rule, path)
+		}
+		out = append(out, fp)
+	}
+	return out, nil
 }
 
 func checkCondValue(cd *cond, sib *valuePlan) error {
@@ -210,7 +281,9 @@ func decodable(t reflect.Type, k vtag.Kind) bool {
 	return true
 }
 
-func (c *compiler) valuePlan(t reflect.Type, tag vtag.Tag) (*valuePlan, error) {
+// valuePlan compiles the plan of one value. elem marks the element of a
+// slice or map, which has no fields beside it for a rule to read.
+func (c *compiler) valuePlan(t reflect.Type, tag vtag.Tag, elem bool) (*valuePlan, error) {
 	vp := &valuePlan{}
 	if t.Kind() == reflect.Pointer {
 		vp.pointer = true
@@ -229,9 +302,14 @@ func (c *compiler) valuePlan(t reflect.Type, tag vtag.Tag) (*valuePlan, error) {
 		if err := vtag.Check(r, field); err != nil {
 			return nil, err
 		}
+		if elem && vtag.ReadsField(r.Name) {
+			return nil, vtag.InElem(r.Name)
+		}
 		switch r.Name {
 		case "required":
 			vp.required = true
+		case "requiredkeys":
+			vp.keys = append(vp.keys, strings.Fields(r.Arg)...)
 		case "requiredif", "forbiddenif":
 			f, v, neg, _ := vtag.ParseCond(r.Arg)
 			vp.conds = append(vp.conds, cond{name: r.Name, field: f, value: v, negate: neg})
@@ -258,11 +336,14 @@ func (c *compiler) valuePlan(t reflect.Type, tag vtag.Tag) (*valuePlan, error) {
 		if tag.Elem != nil {
 			elemTag = *tag.Elem
 		}
-		elem, err := c.valuePlan(t.Elem(), elemTag)
+		elem, err := c.valuePlan(t.Elem(), elemTag, true)
 		if err != nil {
 			return nil, err
 		}
 		vp.elem = elem
+		if err := c.unique(vp); err != nil {
+			return nil, err
+		}
 		if vp.kind == vtag.Map {
 			if t.Key().Kind() != reflect.String {
 				return nil, fmt.Errorf("map keys must be strings, not %s", t.Key())
@@ -284,4 +365,40 @@ func (c *compiler) valuePlan(t reflect.Type, tag vtag.Tag) (*valuePlan, error) {
 		}
 	}
 	return vp, nil
+}
+
+// unique checks the unique rules of a list: its elements, or the field it
+// names in each, must be values unique can compare.
+func (c *compiler) unique(vp *valuePlan) error {
+	elem := vp.elem
+	for i := range vp.rules {
+		r := &vp.rules[i]
+		switch {
+		case r.name != "unique":
+		case r.arg == "":
+			if err := vtag.CheckUnique("", elem.kind, isBytes(elem.typ)); err != nil {
+				return err
+			}
+		case elem.kind != vtag.Struct:
+			return vtag.NotStruct("unique", r.arg, "each element", elem.kind)
+		default:
+			c.links = append(c.links, func() error {
+				path, err := resolvePath(elem.fields, "unique", r.arg)
+				if err != nil {
+					return err
+				}
+				last := path[len(path)-1].plan
+				if err := vtag.CheckUnique(r.arg, last.kind, isBytes(last.typ)); err != nil {
+					return err
+				}
+				r.path = path
+				return nil
+			})
+		}
+	}
+	return nil
+}
+
+func isBytes(t reflect.Type) bool {
+	return t.Kind() == reflect.Slice && t.Elem().Kind() == reflect.Uint8
 }

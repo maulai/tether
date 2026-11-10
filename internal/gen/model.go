@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"go/types"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -76,7 +77,9 @@ type fieldDef struct {
 	pos       token.Pos
 }
 
-func (f *fieldDef) required() bool { return f.tag.Has("required") }
+// required reports whether the input must have the field: required, or
+// requiredkeys, which a missing map cannot satisfy.
+func (f *fieldDef) required() bool { return f.tag.Has("required") || f.tag.Has("requiredkeys") }
 
 type enumDef struct {
 	name   string
@@ -718,10 +721,6 @@ func (m *model) checkFormats(d *structDef) {
 }
 
 func (m *model) checkDef(d *structDef) {
-	byName := map[string]*fieldDef{}
-	for _, f := range d.fields {
-		byName[f.name] = f
-	}
 	for _, f := range d.fields {
 		at := d.name + "." + f.name
 		for _, inline := range inlineDefs(f.typ) {
@@ -730,8 +729,23 @@ func (m *model) checkDef(d *structDef) {
 		if f.asString && len(f.tag.Rules) > 0 && !(len(f.tag.Rules) == 1 && f.tag.Rules[0].Name == "required") {
 			m.errorf(f.pos, "%s: rules other than required are not supported with the json string option", at)
 		}
-		m.checkTag(at, f.tag, f.typ, f.pos)
+		m.checkTag(at, f.tag, f.typ, f.pos, false)
 		for _, r := range f.tag.Rules {
+			if vtag.Compare[r.Name] != "" {
+				if _, err := vtag.Path(r.Arg); err != nil {
+					continue // reported with the tag
+				}
+				bound, err := m.lookupPath(d, r.Name, r.Arg)
+				if err == nil {
+					own, _ := vkind(f.typ)
+					other, _ := vkind(bound.typ)
+					err = vtag.CheckCompare(r.Name, own, r.Arg, other)
+				}
+				if err != nil {
+					m.errorf(f.pos, "%s: %v", at, err)
+				}
+				continue
+			}
 			if r.Name != "requiredif" && r.Name != "forbiddenif" {
 				continue
 			}
@@ -739,9 +753,9 @@ func (m *model) checkDef(d *structDef) {
 			if err != nil {
 				continue
 			}
-			sib, ok := byName[field]
-			if !ok {
-				m.errorf(f.pos, "%s: %s refers to unknown field %q", at, r.Name, field)
+			sib, err := m.lookupPath(d, r.Name, field)
+			if err != nil {
+				m.errorf(f.pos, "%s: %v", at, err)
 				continue
 			}
 			if value == "" {
@@ -763,10 +777,25 @@ func (m *model) checkDef(d *structDef) {
 	}
 }
 
-func (m *model) checkTag(at string, tag vtag.Tag, t *tsType, pos token.Pos) {
+// checkTag checks the rules of one value; elem marks the element of a
+// slice or map, which has no field beside it for a rule to read.
+func (m *model) checkTag(at string, tag vtag.Tag, t *tsType, pos token.Pos, elem bool) {
 	k, ptr := vkind(t)
 	for _, r := range tag.Rules {
 		if err := vtag.Check(r, vtag.Field{Kind: k, Pointer: ptr, Project: m.projectRule}); err != nil {
+			m.errorf(pos, "%s: %v", at, err)
+			continue
+		}
+		var err error
+		switch {
+		case elem && vtag.ReadsField(r.Name):
+			err = vtag.InElem(r.Name)
+		case r.Name == "unique":
+			err = m.checkUnique(r.Arg, t.base().elem)
+		case r.Name == "requiredkeys":
+			err = checkKeys(r.Arg, t.base())
+		}
+		if err != nil {
 			m.errorf(pos, "%s: %v", at, err)
 		}
 	}
@@ -776,8 +805,71 @@ func (m *model) checkTag(at string, tag vtag.Tag, t *tsType, pos token.Pos) {
 			m.errorf(pos, "%s: dive applies to slices and maps only", at)
 			return
 		}
-		m.checkTag(at+" (elements)", *tag.Elem, b.elem, pos)
+		m.checkTag(at+" (elements)", *tag.Elem, b.elem, pos, true)
 	}
+}
+
+// lookupPath finds the field a path of JSON names leads to, from the
+// struct d, as the server does: through structs only.
+func (m *model) lookupPath(d *structDef, rule, path string) (*fieldDef, error) {
+	names, err := vtag.Path(path)
+	if err != nil {
+		return nil, err
+	}
+	var f *fieldDef
+	for i, name := range names {
+		if i > 0 {
+			b := f.typ.base()
+			if b.kind != kRef && b.kind != kObject {
+				k, _ := vkind(f.typ)
+				return nil, vtag.NotStruct(rule, path, strings.Join(names[:i], "."), k)
+			}
+			d = b.def
+		}
+		f = nil
+		for _, cand := range d.fields {
+			if cand.name == name {
+				f = cand
+			}
+		}
+		if f == nil {
+			return nil, fmt.Errorf("%s refers to unknown field %q", rule, path)
+		}
+	}
+	return f, nil
+}
+
+// checkUnique checks that unique can compare the elements of a list, or
+// the field it names in each.
+func (m *model) checkUnique(arg string, elem *tsType) error {
+	k, _ := vkind(elem)
+	if arg == "" {
+		return vtag.CheckUnique("", k, elem.base().kind == kBytes)
+	}
+	b := elem.base()
+	if b.kind != kRef && b.kind != kObject {
+		return vtag.NotStruct("unique", arg, "each element", k)
+	}
+	f, err := m.lookupPath(b.def, "unique", arg)
+	if err != nil {
+		return err
+	}
+	fk, _ := vkind(f.typ)
+	return vtag.CheckUnique(arg, fk, f.typ.base().kind == kBytes)
+}
+
+// checkKeys checks the keys of requiredkeys against the keys a record can
+// have: a record with enum keys has no other.
+func checkKeys(arg string, t *tsType) error {
+	if t.enum == nil {
+		return nil
+	}
+	for _, k := range strings.Fields(arg) {
+		if !slices.Contains(t.enum.values, k) {
+			return fmt.Errorf("requiredkeys names %q, which is not a value of %s", k, t.enum.name)
+		}
+	}
+	return nil
 }
 
 // inlineDefs lists the anonymous structs inside t, which have no name of

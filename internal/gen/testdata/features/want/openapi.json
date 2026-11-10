@@ -166,6 +166,10 @@
             "maximum": 100,
             "type": "integer"
           },
+          "discount": {
+            "description": "Discount applies to products only. Must be 0 when kind is not product.",
+            "type": "number"
+          },
           "ean": {
             "description": "The server also checks it with the rule ean13.",
             "type": "string"
@@ -183,14 +187,32 @@
               "maxLength": 40,
               "type": "string"
             },
+            "description": "The entry de must not be empty.",
+            "required": [
+              "de"
+            ],
             "type": "object"
           },
           "lines": {
+            "description": "No two entries have the same text.",
             "items": {
               "$ref": "#/components/schemas/Line"
             },
             "minItems": 1,
             "type": "array"
+          },
+          "maxQty": {
+            "description": "Must be greater than minQty.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "minQty": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "note": {
+            "description": "Required when contact.email is empty.",
+            "type": "string"
           },
           "parent": {
             "anyOf": [
@@ -241,12 +263,24 @@
             "propertyNames": {
               "$ref": "#/components/schemas/Kind"
             },
+            "required": [
+              "product"
+            ],
             "type": "object"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "uniqueItems": true
           }
         },
         "required": [
           "sku",
-          "kind"
+          "kind",
+          "labels",
+          "stock"
         ],
         "type": "object"
       },
