@@ -8,13 +8,19 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # The oldest Go that go.mod allows and the newest release: a new Go
+        # can change what the generator sees, as 1.27 did with RawMessage.
+        go: [go.mod, stable]
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # the tags, for the release step and its notes
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version-file: ${{ matrix.go == 'go.mod' && 'go.mod' || '' }}
+          go-version: ${{ matrix.go != 'go.mod' && matrix.go || '' }}
       # Node runs the conformance vectors against the TypeScript runtime and
       # the example's generated client against its server; tsc type-checks
       # the generated code with the strictest settings.
