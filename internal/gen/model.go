@@ -384,7 +384,9 @@ func (m *model) typ(t types.Type, at string) *tsType {
 		switch {
 		case path == "time" && obj.Name() == "Time":
 			return &tsType{kind: kDatetime}
-		case path == "encoding/json" && obj.Name() == "RawMessage":
+		case path == "encoding/json" && obj.Name() == "RawMessage",
+			// From Go 1.27 on, json.RawMessage is an alias of jsontext.Value.
+			path == "encoding/json/jsontext" && obj.Name() == "Value":
 			return &tsType{kind: kUnknown}
 		case path == tetherPath && (obj.Name() == "File" || obj.Name() == "Upload"):
 			m.errorf(obj.Pos(), "%s: tether.%s can only be the whole input or output of a handler", at, obj.Name())

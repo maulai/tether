@@ -14,7 +14,7 @@ same rules and the same messages.
 
 ## Install
 
-Go 1.25 or newer:
+Go 1.26 or newer:
 
 ```sh
 go get github.com/maulai/tether
